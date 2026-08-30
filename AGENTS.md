@@ -1,0 +1,245 @@
+# ubiquiti2 — Ubiquiti Network Monitor
+
+## App overview
+Rebuild of a Ubiquiti/UniFi network overview dashboard backed by UnPoller metrics in Cribl Search. The initial overview screen mirrors the supplied screenshot: KPI cards, throughput/client/drop charts, event summary, and device inventory.
+
+## Architecture notes
+- `src/routes/OverviewPage.tsx` owns the first dashboard screen and normalizes live metric values with conservative visual fallbacks.
+- `src/api/metrics.ts` calls `/m/default_search/search/query` with `searchJobSource=metrics` and `datasetId=metrics`.
+- No external API domains are used; `config/proxies.yml` remains empty.
+- Keep Search endpoints in the `default_search` group. KV writes, if added later, must use `text/plain`.
+
+## Design system
+The overview uses a light gray canvas (`#f7f8fa`), white bordered cards, compact Open Sans typography, blue `#347fce` primary series, green `#238b3c` secondary series, and pink `#d65b8d` IoT series. Preserve the two-column panel grid, eight-card KPI row, and compact inventory table unless the reference screen changes.
+
+## Platform rules
+Use `window.CRIBL_API_URL` for Cribl calls, never hard-code workspace URLs. All `/search/` API calls use `/m/default_search`. External hosts must be declared in `config/proxies.yml`. Build after meaningful changes; do not deploy without user approval.
+
+# Cribl App Platform Developer Guide
+
+## Global Variables
+
+The following are set on `window` automatically when your app runs inside Cribl. They are read-only and always present.
+
+| Variable | Example | Description |
+|---|---|---|
+| `CRIBL_API_URL` | `https://localhost:9000/api/v1` | Base URL for all Cribl API calls |
+| `CRIBL_BASE_PATH` | `/app-ui/my-app` | The base path your app is mounted at |
+| `getCriblUser` | `() => Promise<CriblUser>` | The signed-in user — see below |
+
+### Signed-in user identity
+
+`window.getCriblUser()` returns a **memoized** Promise resolving to the
+member viewing your app. Available in installed Apps and in Live Preview.
+
+```js
+const user = await window.getCriblUser();
+// { id, username, email?, firstName?, lastName?, initials? }
+```
+
+| Field | Always present | Notes |
+|---|---|---|
+| `id` | yes | Stable member id — the field to key storage on |
+| `username` | yes | Login name |
+| `email` / `firstName` / `lastName` / `initials` | no | May be absent depending on the member record |
+
+Call it once at startup and keep the result — it's memoized, so repeat
+calls are cheap, but threading one value through your app is simpler than
+awaiting a Promise in every component.
+
+The intended use is **distinguishing members**: per-member preferences,
+"last viewed" state, an avatar in the header. Namespace the KV key on
+`user.id`:
+
+```js
+fetch(`${window.CRIBL_API_URL}/kvstore/prefs/${user.id}`, { method: 'PUT', body });
+```
+
+**It is identity, not authorization.** Two limits, and neither has a
+workaround in the app:
+
+- **No roles or permissions.** The platform states this plainly: the call
+  provides identity only. If a feature should be admin-only, the API call
+  behind it must be what enforces that — the proxy injects the caller's
+  auth, so a request the member isn't entitled to make fails on the server.
+  Hiding the button is presentation, not a control.
+- **It does not reach your backend.** This is a browser-side call with no
+  signed token attached, and `proxies.yml` header-injection expressions
+  support only string literals, `kv.<key>`, and concatenation — there is no
+  user context to inject. So a backend of your own can only be *told* who
+  is asking, by a client that could say anything. Use it for separation
+  (each member gets their own drawer), never for isolation (keeping one
+  member out of another's). Keying a *credential* or any secret on a
+  client-asserted id looks like it enforces per-user access while
+  enforcing nothing.
+
+## How API Calls Work (Fetch Proxy)
+
+Your app runs inside a sandboxed iframe. The platform **automatically intercepts all `fetch()` calls** to `CRIBL_API_URL` and proxies them through the parent window. This is transparent to your code — just use `fetch()` normally.
+
+**What the proxy does for you:**
+- Injects authentication headers (your app never sees or handles auth tokens)
+- Rewrites URLs to scope requests to your app's pack
+- Streams responses back to your app
+
+**What this means for your code:**
+- Use `fetch()` as normal — it just works
+- You do NOT need to handle authentication
+- You cannot override or replace `window.fetch` (it is locked)
+- **Every external request is proxied and checked against `config/proxies.yml`.**
+  There is no "direct" path out of the iframe — see below.
+
+### There is no un-proxied egress
+
+A host not declared in `config/proxies.yml` returns
+`403 {"error":"Domain example.com:443 is not declared in proxies.yml"}`.
+Enforced twice — a `fetch`/XHR wrapper in your realm, and the iframe CSP —
+so there is no way around it:
+
+- A `Worker` or child iframe gets an unpatched native `fetch`, but inherits
+  the CSP and still fails (`TypeError`, not a 403). `<img>`/`<script>` are
+  blocked too. Don't spend time here.
+- `localhost`/`127.0.0.1` are unreachable; declaring them dials Cribl's own
+  loopback, not the user's machine. Private IPs are blocked (SSRF).
+- `proxies.yml` is checked at **runtime**, not just packaging: a new host
+  needs a file edit and a repackage, never a setting.
+- The frame's origin is opaque (`self.origin === "null"`, not
+  `location.origin`), so origin-gated APIs are unavailable —
+  `navigator.serviceWorker` throws on *property access*, so feature-detect
+  inside `try`/`catch`.
+
+### URL Rewriting Rules
+
+The proxy applies these rewrites automatically:
+
+| What you call | What actually happens | Why |
+|---|---|---|
+| `fetch(CRIBL_API_URL + '/kvstore/my-key')` | Rewritten to `/api/v1/p/{yourPackId}/kvstore/my-key` | Scopes KV store access to your pack |
+| `fetch(CRIBL_API_URL + '/proxy/some/path')` | Rewritten to `/api/v1/p/{yourPackId}/proxy/some/path` | Scopes proxy calls to your pack |
+| `fetch('https://api.example.com/data')` | Rewritten to `/api/v1/p/{yourPackId}/proxy/api.example.com/data` — **403 unless `api.example.com` is declared in `config/proxies.yml`** | External calls are routed through the platform proxy |
+| `fetch(CRIBL_API_URL + '/search/jobs')` | Passed through as-is | Standard API calls are not rewritten |
+
+**Important:** Your app cannot access other packs' resources. Any request targeting a different pack ID will be rejected.
+
+### Request Timeout
+
+Proxied requests time out after **30 seconds** if no response is received. Use `AbortController` if you need to cancel requests earlier.
+
+## Platform APIs
+
+API endpoint definitions are available in `openapi.json` (if downloaded during project setup).
+
+### Key-Value Store
+
+Each app has a scoped KV store. Use `CRIBL_API_URL` as the base — the proxy handles scoping.
+
+| Operation | Method | URL | Body |
+|---|---|---|---|
+| Get | GET | `CRIBL_API_URL + '/kvstore/the/path/to/key'` | — |
+| Set | PUT | `CRIBL_API_URL + '/kvstore/the/path/to/key'` | value |
+| Delete | DELETE | `CRIBL_API_URL + '/kvstore/the/path/to/key'` | — |
+| List keys | POST | `CRIBL_API_URL + '/kvstore/keys'` | `{ prefix: 'my/key/prefix' }` |
+
+### Config Group Context
+
+Cribl REST API endpoints that don't begin with `/system/` are contextual and can be called in the context of a config group using the prefix `/m/:groupId`. Config groups can be listed using the `/master/groups` endpoint.
+
+Endpoints beginning with `/search/` should ALWAYS use `groupId` set to `default_search` — for example: `/m/default_search/search/jobs`. Never use any other group ID for search endpoints.
+
+When asked to build a feature, always inspect Cribl REST APIs and understand the context of the request before starting to build.
+
+### External API Calls
+
+To call external APIs, just use `fetch()` with the full URL. The platform will automatically route these through your pack's proxy endpoint. The external domain must be declared in your app's `config/proxies.yml`.
+
+### proxies.yml — External Domain Configuration
+
+Your app must declare every external domain it needs to access in `config/proxies.yml`. This file lives in your project's `config/` directory and gets packaged with your app. Admins can see exactly which external endpoints your app communicates with at install time.
+
+**Schema:**
+
+```yaml
+# config/proxies.yml
+# Top-level keys are domain:port pairs (port optional, defaults to 443)
+
+api.openai.com:
+  timeout: 10000          # Optional: request timeout in ms (1000–120000, default 30000)
+
+  paths:                   # Optional: control which URL paths are allowed
+    allowlist:             # Prefix match — request path must start with one of these
+      - /v1/chat/
+      - /v1/models
+    blocklist:             # Prefix match — these paths are always blocked (takes precedence over allowlist)
+      - /v1/admin/
+
+  headers:                 # Optional: control header forwarding and injection
+    inject:                # Headers to add to every outgoing request to this domain
+      x-api-key: "'static-key'"
+      Authorization: "'Bearer ' + kv.openaiApiKey"
+      x-custom: kv.myHeaderValue
+    allowlist:             # Only forward these headers from the original request (supports wildcards)
+      - content-type
+      - accept
+      - x-custom-*
+    blocklist:             # Never forward these headers (takes precedence, supports wildcards)
+      - x-internal-*
+```
+
+**Header injection expressions** support:
+- String literals: `"'my-static-value'"`
+- KV store lookups: `kv.mySecretKey` (resolves encrypted KV values at request time)
+- Concatenation: `"'Bearer ' + kv.apiToken"`
+
+**Security notes:**
+- Sensitive headers (`cookie`, `authorization`, `proxy-authorization`, `host`, `connection`, `transfer-encoding`) are always stripped from the original request before forwarding — use `headers.inject` to set auth headers instead
+- The platform validates target domains against SSRF protections (private/reserved IPs are blocked)
+- Requests are rate-limited per pack (100 requests/minute)
+- All proxied requests use HTTPS
+
+**Example — minimal config for a single API:**
+
+```yaml
+# config/proxies.yml
+api.example.com:
+  headers:
+    inject:
+      Authorization: "'Bearer ' + kv.apiKey"
+```
+
+**Example — multiple domains with path restrictions:**
+
+```yaml
+# config/proxies.yml
+api.openai.com:
+  timeout: 60000
+  paths:
+    allowlist:
+      - /v1/chat/completions
+      - /v1/embeddings
+  headers:
+    inject:
+      Authorization: "'Bearer ' + kv.openaiKey"
+
+hooks.slack.com:
+  paths:
+    allowlist:
+      - /services/
+  headers:
+    inject:
+      Content-Type: "'application/json'"
+```
+
+**How it connects to fetch:** When your app calls `fetch('https://api.openai.com/v1/chat/completions', ...)`, the platform rewrites this to `/api/v1/p/{yourPackId}/proxy/api.openai.com/v1/chat/completions`, looks up `api.openai.com` in your `proxies.yml`, validates the path, injects headers, and forwards the request.
+
+## React Router
+
+When using React Router, set the basename to `window.CRIBL_BASE_PATH`:
+
+```jsx
+<BrowserRouter basename={window.CRIBL_BASE_PATH}>
+```
+
+## Navigation
+
+The platform synchronizes navigation between your app and the parent Cribl UI. If you use `history.pushState()` or `history.replaceState()`, the parent URL bar will update to reflect your app's current route. Navigation changes from the parent are also forwarded to your app as `popstate` events.
+

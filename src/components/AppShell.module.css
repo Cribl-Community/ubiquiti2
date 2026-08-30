@@ -1,0 +1,11 @@
+.shell {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+}
+.main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px;
+  background: #f7f8fa;
+}

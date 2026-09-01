@@ -7,10 +7,9 @@ on:
 
 permissions:
   contents: read
-  # @criblio packages live in GitHub Packages, which requires auth even for
-  # public reads. This is what replaced cloning the framework at a pinned
-  # SHA — see .npmrc.
-  packages: read
+  # @criblio packages are public on npmjs — no packages: read, no registry
+  # token, and no .npmrc routing (an app still pinned to GitHub Packages
+  # would keep all three; this one moved to the published packages).
 
 jobs:
   build:
@@ -18,18 +17,17 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Registry mode: no `framework-sha`, so the action skips the
-      # pinned-clone step and `npm ci` resolves @criblio from the registry
-      # against this app's own lockfile. The framework version you build
-      # against is pinned by package-lock.json like any other dependency,
-      # rather than by a SHA kept in step by hand.
+      # pinned-clone step. The action generates/refreshes
+      # package-lock.json in CI before `npm ci`, so `@criblio` (and
+      # everything else) is resolved against a lockfile that is never
+      # committed here — this app carries no lockfile by design, and
+      # nothing in the app creates one.
       #
       # The ref below is still a SHA — that pins the ACTION, which is
       # supply-chain hygiene every other step here follows (and which
       # `npm run security:static` enforces), not a framework source
       # dependency.
-      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@5c7659bbcbdd0a4ef366f4767bfee70cf5523251
-        with:
-          registry-token: ${{ github.token }}
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Retain exact tested candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

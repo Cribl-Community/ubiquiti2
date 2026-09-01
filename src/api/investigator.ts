@@ -11,20 +11,20 @@
  * drives the same agent loop from the browser.
  */
 import { runQuery } from './cribl';
-import { configureAgent, type AgentContext, type AgentToolDefinition } from '../vendor/agent';
+import { configureAgent, type AgentContext, type AgentToolDefinition } from '@criblio/app-utils/agent';
 import {
   runSearchDefinition,
   runMetricsQueryDefinition,
-} from '../vendor/agent-tool-defs';
+} from '@criblio/app-utils/agent-tool-defs';
 import {
   createRunSearchTool,
   createRunMetricsQueryTool,
   executeCommonToolCall,
   type ToolCallInvocation,
   type ToolExecutionResult,
-} from '../vendor/agent-tools';
-import { assertReadOnlyKql } from '../vendor/kql';
-import { createMetricsCatalog, type CatalogTransport } from '../vendor/metrics-catalog';
+} from '@criblio/app-utils/agent-tools';
+import { assertReadOnlyKql } from '@criblio/app-utils/kql';
+import { createMetricsCatalog, type CatalogTransport } from '@criblio/app-utils/metrics-catalog';
 
 configureAgent({ surface: 'ubiquiti2NetworkInvestigator' });
 

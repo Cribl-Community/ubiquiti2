@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { runQuery } from '../api/cribl';
+import { useTimeRange } from '../components/TimeRange';
 import s from './EventsPage.module.css';
 
 /** One CEF controller event, parsed at read time. */
@@ -59,9 +60,9 @@ export default function EventsPage(){
   const [loading,setLoading]=useState(true);
   const [filter,setFilter]=useState<string|null>(null);   /* bar click filters the feed */
   const [pinned,setPinned]=useState<number|null>(null);   /* clicked time pins a row */
-  const [range,setRange]=useState('Last hour');
-  const [tick,setTick]=useState(0);
-  const earliest=range==='Last 6 hours'?'-6h':'-1h';
+  const tr=useTimeRange();
+  
+  const earliest=tr.earliest;
 
   useEffect(()=>{
     setLoading(true);setPinned(null);
@@ -83,7 +84,7 @@ export default function EventsPage(){
       setSyslogFeed(slf.map(r=>({time:when(Number(r._time)),severity:String(r.severityName??'info'),device:String(r.device??'—'),model:String(r.model??'—'),msg:String(r.msg??'—')})));
       setLoading(false);
     }).catch(()=>setLoading(false));
-  },[earliest,tick]);
+  },[earliest,tr.refreshKey]);
 
   const [bars,setBars]=useState<{name:string;count:number}[]>([]);
 
@@ -101,12 +102,9 @@ export default function EventsPage(){
     <header>
       <h1>Events <small>UniFi log streams, parsed at read time</small></h1>
       <div className={s.controls}>
-        <select value={range} onChange={e=>setRange(e.target.value)}>
-          <option>Last hour</option>
-          <option>Last 6 hours</option>
-        </select>
-        <select defaultValue="Auto-refresh off"><option>Auto-refresh off</option><option>Auto-refresh on</option></select>
-        <button onClick={()=>setTick(t=>t+1)}>↻</button>
+        {tr.rangeSelect}
+        {tr.autoSelect}
+        <button onClick={()=>tr.refresh()}>↻</button>
       </div>
     </header>
     <div className={s.cards}>

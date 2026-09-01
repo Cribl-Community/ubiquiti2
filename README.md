@@ -59,11 +59,14 @@ rejected before they ever reach the API.
     prompt (the UniFi data map the agent gets on every investigation),
     request context, tool executors, and the per-entity prompt templates.
   - `appSettings.ts` — app-level settings.
-- **`src/vendor/`** — the framework's investigator/agent/kql/metrics/viz
-  source, vendored so the app's own bundler compiles it (package CSS modules
-  and a second React copy via esm.sh broke rendering — see the note in
-  `capra.tsx`). `capra.tsx` is a small local Button/Modal shim styled with the
-  app's CDS tokens.
+- **Published framework packages** — everything framework-side
+  (investigator, agent loop, KQL guard, metrics, viz) comes from the
+  published `@criblio/app-utils` on npmjs (`^0.8.1`), with its
+  `@capra/core` peer declared explicitly. 0.8.0 shipped CSS modules
+  without class-name maps (the investigator rendered unstyled);
+  0.8.1 fixed it — do not downgrade below 0.8.1. The bundle carries
+  one copy of the package internals per esm.sh subpath build, which
+  is why it is larger than a locally compiled one.
 - **`src/components/viz/`** — d3-based LineChart, BarList, StatTile, and
   sparkline components used across the dashboards.
 - **Design system** — CDS tokens (`--cds-*`) defined in `src/styles/global.css`;

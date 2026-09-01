@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { InvestigatorChat } from '../vendor/investigator';
-import MetricsToolCard from '../vendor/investigator/MetricsToolCard';
-import type { MetricsQueryUi } from '../vendor/agent-tools';
+import { InvestigatorChat } from '@criblio/app-utils/investigator';
+import MetricsToolCard from '@criblio/app-utils/investigator/metrics-tool-card';
+import type { MetricsQueryUi } from '@criblio/app-utils/agent-tools';
 import {
   buildContext,
   buildSeedPrompt,

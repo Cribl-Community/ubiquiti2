@@ -7,10 +7,10 @@ export interface MetricPoint {
 
 const apiUrl = () => window.CRIBL_API_URL ?? '/api/v1';
 
-export async function queryMetric(query: string, step?: number): Promise<MetricPoint[]> {
+export async function queryMetric(query: string, step?: number, earliest = '-1h'): Promise<MetricPoint[]> {
   const params = new URLSearchParams({
     query,
-    earliest: '-1h',
+    earliest,
     latest: 'now',
     searchJobSource: 'metrics',
     datasetId: 'metrics',

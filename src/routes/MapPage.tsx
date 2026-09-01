@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { NetworkGraph, type ForceLink, type ForceNode } from '@criblio/app-utils/graph';
 import { queryMetric, type MetricPoint } from '../api/metrics';
 import { investigatePrompt } from '../api/investigator';
+import { useTimeRange } from '../components/TimeRange';
 import s from './MapPage.module.css';
 
 type Node = ForceNode & { kind:'gateway'|'switch'|'ap'|'client'; mac?:string; name:string; clients?:number; apName?:string; rate:number };
@@ -49,7 +50,7 @@ const clientRatesFrom=(rows:MetricPoint[])=>{
 };
 
 export default function MapPage(){
-  const navigate=useNavigate();
+  const navigate=useNavigate();const tr=useTimeRange();
   const [devices,setDevices]=useState<Node[]>([]);
   const [topology,setTopology]= useState<Edge[]>([]);
   const [wiredGroups,setWiredGroups]=useState<{parentId:string;clients:{mac:string;name:string}[]}[]>([]);
@@ -76,14 +77,14 @@ export default function MapPage(){
       queryMetric('unpoller_device_info'),
       queryMetric('unpoller_topology_link_rate_mbps'),
       queryMetric('unpoller_client_uptime_seconds'),
-      queryMetric('sum by (name, mac, ap_name) (rate(unpoller_client_receive_bytes_total[5m]))',60),
-      queryMetric('sum by (name, mac) (rate(unpoller_client_transmit_bytes_total[5m]))',60),
-      queryMetric('sum by (name) (rate(unpoller_device_switch_receive_bytes_total[5m]))',60),
-      queryMetric('sum by (name) (rate(unpoller_device_switch_transmit_bytes_total[5m]))',60),
-      queryMetric('sum by (name) (rate(unpoller_device_vap_receive_bytes_total[5m]))',60),
-      queryMetric('sum by (name) (rate(unpoller_device_vap_transmit_bytes_total[5m]))',60),
-      queryMetric('100 * max by (name) (unpoller_device_cpu_utilization_ratio)',60),
-      queryMetric('100 * max by (name) (unpoller_device_memory_utilization_ratio)',60),
+      queryMetric('sum by (name, mac, ap_name) (rate(unpoller_client_receive_bytes_total[5m]))',tr.step,tr.earliest),
+      queryMetric('sum by (name, mac) (rate(unpoller_client_transmit_bytes_total[5m]))',tr.step,tr.earliest),
+      queryMetric('sum by (name) (rate(unpoller_device_switch_receive_bytes_total[5m]))',tr.step,tr.earliest),
+      queryMetric('sum by (name) (rate(unpoller_device_switch_transmit_bytes_total[5m]))',tr.step,tr.earliest),
+      queryMetric('sum by (name) (rate(unpoller_device_vap_receive_bytes_total[5m]))',tr.step,tr.earliest),
+      queryMetric('sum by (name) (rate(unpoller_device_vap_transmit_bytes_total[5m]))',tr.step,tr.earliest),
+      queryMetric('100 * max by (name) (unpoller_device_cpu_utilization_ratio)',tr.step,tr.earliest),
+      queryMetric('100 * max by (name) (unpoller_device_memory_utilization_ratio)',tr.step,tr.earliest),
     ]).then(([devicesQ,topologyQ,clients,clientRx,clientTx,switchRx,switchTx,vapRx,vapTx,cpuRows,memoryRows])=>{
       /* devices */
       const byMac=new Map<string,Node>();
@@ -147,7 +148,7 @@ export default function MapPage(){
       setCpu(pct(cpuRows));setMemory(pct(memoryRows));
       setLoading(false);
     }).catch(()=>setLoading(false));
-  },[]);
+  },[tr.range,tr.refreshKey]);
 
   const graph=useMemo(()=>{
     const nodes:Node[]=[...devices];
@@ -201,9 +202,9 @@ export default function MapPage(){
     <header>
       <h1>Network Map <small>live topology — edge width &amp; label = traffic on that link</small></h1>
       <div className={s.controls}>
-        <select defaultValue="Last hour"><option>Last hour</option><option>Last 6 hours</option></select>
-        <select defaultValue="Auto-refresh off"><option>Auto-refresh off</option><option>Auto-refresh on</option></select>
-        <button>↻</button>
+        {tr.rangeSelect}
+        {tr.autoSelect}
+        <button onClick={tr.refresh}>↻</button>
       </div>
     </header>
     <section ref={mapRef} className={s.map} onPointerLeave={()=>{if(!pinned)setHovered(null)}}>

@@ -26,7 +26,7 @@ function Panel({ title, children }: { title: string; children: ReactNode }) { re
 export default function AccessPointsPage() {
   const tr = useTimeRange();
   const [count, setCount] = useState(7); const [clients, setClients] = useState(28); const [two, setTwo] = useState(14); const [five, setFive] = useState(14);
-  useEffect(() => { void Promise.all([latestMetric('count(unpoller_device_uptime_seconds{type="uap"})',7), latestMetric('sum(unpoller_device_stations{type="uap"})',28), latestMetric('sum(unpoller_device_radio_stations{radio="ng"})',14), latestMetric('sum(unpoller_device_radio_stations{radio="na"})',14)]).then(([a,c,n,f]) => { setCount(a);setClients(c);setTwo(n);setFive(f); }); }, [tr.range, tr.refreshKey]);
+  useEffect(() => { void Promise.all([latestMetric('count(unpoller_device_uptime_seconds{type="uap"})',7), latestMetric('sum(unpoller_device_stations{type="uap"})',28), latestMetric('sum(unpoller_device_radio_stations{radio="ng"})',14), latestMetric('sum(unpoller_device_radio_stations{radio="na"})',14)]).then(([a,c,n,f]) => { setCount(a);setClients(c);setTwo(n);setFive(f); }); }, [tr.earliest, tr.range, tr.refreshKey]);
   const channelItems: BarListItem[] = [['100',9],['1',8],['6',5],['161',4],['44',4],['48',3],['11',1]].map(([label,value]) => ({ label, value }));
   const vendorItems: BarListItem[] = [['Unknown',13],['AMPAK Technology, Inc.',4],['Apple, Inc.',3],['Alpha Networks Inc.',3],['Samsung Electronics Co.,Ltd',2],['Microsoft Corporation',2],['Microchip Technology Inc.',1],['Qolsys Inc.',1],['Tesla Inc',1],['Eight Sleep',1]].map(([label,value]) => ({ label, value }));
   const percent = (v: number) => `${v.toFixed(1)}%`; const db = (v: number) => `${v.toFixed(0)} dB`;

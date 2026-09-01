@@ -84,7 +84,7 @@ export default function EventsPage(){
       setSyslogFeed(slf.map(r=>({time:when(Number(r._time)),severity:String(r.severityName??'info'),device:String(r.device??'—'),model:String(r.model??'—'),msg:String(r.msg??'—')})));
       setLoading(false);
     }).catch(()=>setLoading(false));
-  },[earliest,tr.refreshKey]);
+  },[earliest,tr.refreshKey,tr.range]);
 
   const stats=useMemo(()=>{
     const c={connects:0,roams:0,disconnects:0,other:0};

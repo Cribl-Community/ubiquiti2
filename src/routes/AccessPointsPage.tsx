@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { latestMetric } from '../api/metrics';
 import BarList, { type BarListItem } from '../components/viz/BarList';
-import LineChart, { type LineSeries } from '../components/viz/LineChart';
+import LineChart from '../components/viz/LineChart';
 import type { ReactNode } from 'react';
 import { useTimeRange } from '../components/TimeRange';
 import s from './AccessPointsPage.module.css';

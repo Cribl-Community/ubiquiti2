@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { latestMetric, queryMetric, type MetricPoint } from '../api/metrics';
+import { latestMetric, type MetricPoint } from '../api/metrics';
 import { runQuery } from '../api/cribl';
 import { investigatePrompt } from '../api/investigator';
 import LineChart, { type LineSeries } from '../components/viz/LineChart';

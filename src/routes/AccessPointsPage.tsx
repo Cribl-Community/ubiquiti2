@@ -17,9 +17,6 @@ const aps: AP[] = [
   { name: 'AP Guest House Patio', clients: 1, two: 59, five: 2, cpu: 1.4, memory: 78.8, rssi: '24 dB' },
   { name: 'AP Guest House', clients: 0, two: 28, five: 7, cpu: 10.3, memory: 71.4, rssi: '—' },
 ];
-const colors = ['#347fce','#238b3c','#d36b96','#d69d2d','#3a9d84','#d86b3a','#4e5095'];
-const chartValues = (base: number) => Array.from({ length: 36 }, (_, i) => ({ t: Date.now() - (35 - i) * 100000, v: Math.max(0, base * (1 + Math.sin(i * 1.7) * .12 + Math.sin(i * .31) * .06)) }));
-const seriesFor = (bases: number[]): LineSeries[] => aps.map((ap, i) => ({ name: ap.name, color: colors[i], data: chartValues(bases[i] ?? 0) }));
 
 function Chart({ title, subtitle, format, yMax, area = false }: { title: string; subtitle?: string; bases: number[]; format?: (v: number) => string; yMax?: number; area?: boolean }) {
   return <LineChart title={title} subtitle={subtitle} series={[]} height={164} yFormat={format} yMax={yMax} area={area} />;

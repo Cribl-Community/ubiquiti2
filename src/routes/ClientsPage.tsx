@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { runQuery } from '../api/cribl';
 import { queryMetric, latestMetric, type MetricPoint } from '../api/metrics';
 import LineChart, { type LineSeries } from '../components/viz/LineChart';
 import BarList, { type BarListItem } from '../components/viz/BarList';

@@ -195,7 +195,9 @@ export default function MapPage(){
   const deviceSeries=activeNode?trafficSeries.get(activeNode.name):undefined;
 
   const toggle=(apId:string)=>setExpanded(prev=>{
-    const next=new Set(prev);next.has(apId)?next.delete(apId):next.add(apId);return next;
+    const next=new Set(prev);
+    if (next.has(apId)) next.delete(apId); else next.add(apId);
+    return next;
   });
 
   return <div className={s.page}>

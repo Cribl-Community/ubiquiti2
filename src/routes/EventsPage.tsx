@@ -61,7 +61,7 @@ export default function EventsPage(){
   const [filter,setFilter]=useState<string|null>(null);   /* bar click filters the feed */
   const [pinned,setPinned]=useState<number|null>(null);   /* clicked time pins a row */
   const tr=useTimeRange();
-  
+  const [bars,setBars]=useState<{name:string;count:number}[]>([]);
   const earliest=tr.earliest;
 
   useEffect(()=>{
@@ -85,8 +85,6 @@ export default function EventsPage(){
       setLoading(false);
     }).catch(()=>setLoading(false));
   },[earliest,tr.refreshKey]);
-
-  const [bars,setBars]=useState<{name:string;count:number}[]>([]);
 
   const stats=useMemo(()=>{
     const c={connects:0,roams:0,disconnects:0,other:0};

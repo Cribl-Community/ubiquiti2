@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import AppShell from './components/AppShell';
+import ScrollToTop from './components/ScrollToTop';
 import SettingsPage from './routes/SettingsPage';
 import OverviewPage from './routes/OverviewPage';
 import AccessPointsPage from './routes/AccessPointsPage';
@@ -16,6 +17,7 @@ import MapPage from './routes/MapPage';
 export default function App() {
   return (
     <BrowserRouter basename={window.CRIBL_BASE_PATH ?? '/'}>
+      <ScrollToTop />
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<OverviewPage />} />

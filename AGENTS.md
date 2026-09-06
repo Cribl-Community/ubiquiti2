@@ -5,7 +5,7 @@ Rebuild of a Ubiquiti/UniFi network overview dashboard backed by UnPoller metric
 
 ## Architecture notes
 - `src/routes/OverviewPage.tsx` owns the first dashboard screen and normalizes live metric values with conservative visual fallbacks.
-- `src/api/metrics.ts` calls `/m/default_search/search/query` with `searchJobSource=metrics` and `datasetId=metrics`.
+- `src/api/metrics.ts` delegates to the framework's published metrics client (`@criblio/app-utils/metrics` — `cachedQueryInstant`/`cachedQueryRange`), not a hand-rolled fetch of `/search/query`; the framework owns URL building, NDJSON parsing, and job-status checking. Calls are serialized through a local one-at-a-time gate because the app-preview harness rejects concurrent fetches ("Preview is busy"); installed apps have no such gate.
 - No external API domains are used; `config/proxies.yml` remains empty.
 - Keep Search endpoints in the `default_search` group. KV writes, if added later, must use `text/plain`.
 

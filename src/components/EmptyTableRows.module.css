@@ -1,0 +1,5 @@
+.row td { height: 32px; }
+.empty td { padding: 18px 8px; text-align: center; color: var(--cds-color-fg-muted); font-size: 12px; }
+.line, .lineWide { display: block; height: 8px; border-radius: 4px; background: repeating-linear-gradient(135deg, #d9dde2 0, #d9dde2 7px, #eef0f2 7px, #eef0f2 12px); opacity: .8; }
+.line { width: 58%; }
+.lineWide { width: 78%; }

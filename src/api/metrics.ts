@@ -1,3 +1,40 @@
+/**
+ * App-facing metrics helpers — a thin delegation to the framework's
+ * published metrics client (@criblio/app-utils/metrics). The fetch,
+ * NDJSON parsing, job-status checking, and error shaping all live in
+ * the framework so every app picks up its fixes; this module only
+ * adapts the framework's MetricSample/MetricSeries shapes to the
+ * flat MetricPoint the app's routes consume.
+ *
+ * Imported by SUBPATH, not from the package root — see the note in
+ * cribl.ts for why the package root breaks the browser build.
+ *
+ * The cached* variants dedupe in-flight GETs and keep results for 12s:
+ * the pages refire the same queries on every mount/nav/refresh, and the
+ * metrics engine keeps computing a query even after the browser stops
+ * reading it, so repeat identical reads are cheaper than fresh ones.
+ */
+import {
+  cachedQueryInstant,
+  cachedQueryRange,
+  type MetricSample,
+} from '@criblio/app-utils/metrics';
+
+// The app-preview harness proxies every fetch the app makes and rejects
+// new requests while one is still in flight ("Preview is busy. Wait for
+// its current requests or Search jobs to finish.") — a page fanning out a
+// dozen metrics GETs at once therefore self-rejects. Serialize the reads:
+// at most one metrics request in flight. The framework's short-TTL cache
+// absorbs the repeat navigations that would otherwise make serial latency
+// painful. (Installed apps have no such gate; serializing is harmless
+// there — the fan-out is just ordered instead of parallel.)
+let tail: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(run: () => Promise<T>): Promise<T> {
+  const result = tail.then(run, run);
+  tail = result.catch(() => undefined);
+  return result;
+}
+
 export interface MetricPoint {
   value: number;
   time?: number;
@@ -5,31 +42,20 @@ export interface MetricPoint {
   labels?: Record<string, string>;
 }
 
-const apiUrl = () => window.CRIBL_API_URL ?? '/api/v1';
+function toPoint(sample: MetricSample): MetricPoint {
+  return { value: sample._value, time: sample._time, labels: sample.labels };
+}
 
 export async function queryMetric(query: string, step?: number, earliest = '-1h'): Promise<MetricPoint[]> {
-  const params = new URLSearchParams({
-    query,
-    earliest,
-    latest: 'now',
-    searchJobSource: 'metrics',
-    datasetId: 'metrics',
-  });
-  if (step) params.set('step', String(step));
-  const response = await fetch(`${apiUrl()}/m/default_search/search/query?${params}`);
-  if (!response.ok) throw new Error(`Metric query failed (${response.status})`);
-  const text = await response.text();
-  return text.split('\n').filter(Boolean).flatMap((line) => {
-    try {
-      const row = JSON.parse(line) as Record<string, unknown>;
-      const labels = Object.fromEntries(Object.entries(row).filter(([key, value]) => !key.startsWith('_') && !['instance','job','source'].includes(key) && typeof value === 'string'));
-      if (row._kind === 'sample' && typeof row._value === 'number') return [{ value: row._value, time: Number(row._time), labels }];
-      if (typeof row.value === 'number') return [{ value: row.value, labels }];
-      if (typeof row.last === 'number') return [{ value: row.last, labels }];
-      if (Array.isArray(row.data)) return row.data.filter((p): p is { value: number; time?: number; labels?: Record<string, string> } => typeof p === 'object' && p !== null && typeof (p as { value?: unknown }).value === 'number').map((p) => ({ ...p, labels }));
-    } catch { /* ignore non-JSON response fragments */ }
-    return [];
-  });
+  if (step) {
+    // Range query: one sample per step per series, grouped by label set.
+    // Flattened back to the app's flat MetricPoint rows (time-sorted).
+    const series = await oneAtATime(() => cachedQueryRange(query, { earliest, step }));
+    return series.flatMap((sr) => sr.points.map((p) => ({ value: p.v, time: p.t, labels: sr.labels })));
+  }
+  // Instant query: single sample per series at `latest`.
+  const samples = await oneAtATime(() => cachedQueryInstant(query, { earliest, latest: 'now' }));
+  return samples.map(toPoint);
 }
 
 export async function latestMetric(query: string, fallback: number): Promise<number> {

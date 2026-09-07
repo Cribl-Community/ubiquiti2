@@ -1,8 +1,14 @@
 # External API declarations for the Cribl App Platform fetch proxy.
-# Add entries here for any external domains your app needs to reach.
-# Example:
-# - host: api.example.com
-#   paths:
-#     - /v1/
-#   headers:
-#     Authorization: Bearer ${API_KEY}
+# GoatTown server-side investigator. The bearer token is injected here
+# from the app KV credential `goattownEmbedToken` (set by an admin) and
+# never passes through browser code. If the deployment uses a different
+# GoatTown host, it must be declared here and the app repackaged.
+goattown-shared.lab.cribl.io:
+  timeout: 30000
+  headers:
+    inject:
+      authorization: "'Bearer ' + kv.goattownEmbedToken"
+    allowlist:
+      - content-type
+      - accept
+      - x-goattown-user

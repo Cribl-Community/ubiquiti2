@@ -6,8 +6,9 @@ Rebuild of a Ubiquiti/UniFi network overview dashboard backed by UnPoller metric
 ## Architecture notes
 - `src/routes/OverviewPage.tsx` owns the first dashboard screen and normalizes live metric values with conservative visual fallbacks.
 - `src/api/metrics.ts` delegates to the framework's published metrics client (`@criblio/app-utils/metrics` — `cachedQueryInstant`/`cachedQueryRange`), not a hand-rolled fetch of `/search/query`; the framework owns URL building, NDJSON parsing, and job-status checking. Calls are serialized through a local one-at-a-time gate because the app-preview harness rejects concurrent fetches ("Preview is busy"); installed apps have no such gate.
-- No external API domains are used; `config/proxies.yml` remains empty.
-- Keep Search endpoints in the `default_search` group. KV writes, if added later, must use `text/plain`.
+- The Investigate page is driven by **GoatTown's server-side investigator** (durable sessions), not a browser agent loop. `src/api/goattown.ts` is the only module that talks to GoatTown: connection metadata in app KV `goattown/connection` (JSON, `text/plain`), the `/investigations` create/list + per-session status/events/messages/lifecycle operations from `@criblio/agent-protocol` v1, a bounded poller (4s running / 15s idle, no overlapping polls, paused on hidden tabs, Retry-After backoff), and wire→transcript folding via `applyLoopEvent`. The page renders `InvestigatorTranscript` + `MetricsToolCard` from `@criblio/app-utils/investigator`; explicit Investigate actions start a session once, reload/mount reattaches from `goattown/sessions/{memberId}`.
+- The bearer token for GoatTown is proxy-injected from KV `goattownEmbedToken` (see `config/proxies.yml`, host `goattown-shared.lab.cribl.io`); browser code only forwards `x-goattown-user` from `window.getCriblUser()`. A different host requires a `proxies.yml` entry + repackage.
+- Keep Search endpoints in the `default_search` group. KV writes must use `text/plain`.
 
 ## Design system
 The overview uses a light gray canvas (`#f7f8fa`), white bordered cards, compact Open Sans typography, blue `#347fce` primary series, green `#238b3c` secondary series, and pink `#d65b8d` IoT series. Preserve the two-column panel grid, eight-card KPI row, and compact inventory table unless the reference screen changes.

@@ -35,6 +35,37 @@ function oneAtATime<T>(run: () => Promise<T>): Promise<T> {
   return result;
 }
 
+/**
+ * Failures used to vanish into `.catch(() => undefined)` and render as
+ * plain empty states. Record the most recent failure (with the exact
+ * PromQL and the framework's error message) and broadcast it so pages
+ * can show a real error instead of silent emptiness.
+ */
+export interface MetricsFailure {
+  query: string;
+  message: string;
+  at: number;
+}
+export const METRICS_ERROR_EVENT = 'ubiquiti2:metrics-error';
+let lastFailure: MetricsFailure | null = null;
+
+export function lastMetricsFailure(): MetricsFailure | null {
+  return lastFailure;
+}
+
+export function clearMetricsFailure(): void {
+  lastFailure = null;
+}
+
+function recordFailure(query: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  lastFailure = { query, message, at: Date.now() };
+  console.error('[metrics]', query, '→', message);
+  try {
+    window.dispatchEvent(new CustomEvent(METRICS_ERROR_EVENT, { detail: lastFailure }));
+  } catch { /* non-browser harness */ }
+}
+
 export interface MetricPoint {
   value: number;
   time?: number;
@@ -47,15 +78,20 @@ function toPoint(sample: MetricSample): MetricPoint {
 }
 
 export async function queryMetric(query: string, step?: number, earliest = '-1h'): Promise<MetricPoint[]> {
-  if (step) {
-    // Range query: one sample per step per series, grouped by label set.
-    // Flattened back to the app's flat MetricPoint rows (time-sorted).
-    const series = await oneAtATime(() => cachedQueryRange(query, { earliest, step }));
-    return series.flatMap((sr) => sr.points.map((p) => ({ value: p.v, time: p.t, labels: sr.labels })));
+  try {
+    if (step) {
+      // Range query: one sample per step per series, grouped by label set.
+      // Flattened back to the app's flat MetricPoint rows (time-sorted).
+      const series = await oneAtATime(() => cachedQueryRange(query, { earliest, step }));
+      return series.flatMap((sr) => sr.points.map((p) => ({ value: p.v, time: p.t, labels: sr.labels })));
+    }
+    // Instant query: single sample per series at `latest`.
+    const samples = await oneAtATime(() => cachedQueryInstant(query, { earliest, latest: 'now' }));
+    return samples.map(toPoint);
+  } catch (err) {
+    recordFailure(query, err);
+    return [];
   }
-  // Instant query: single sample per series at `latest`.
-  const samples = await oneAtATime(() => cachedQueryInstant(query, { earliest, latest: 'now' }));
-  return samples.map(toPoint);
 }
 
 export async function latestMetric(query: string, fallback: number): Promise<number> {

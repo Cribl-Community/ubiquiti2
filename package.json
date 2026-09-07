@@ -22,7 +22,8 @@
   },
   "dependencies": {
     "@capra/core": "^1.5.0",
-    "@criblio/app-utils": "^0.8.2",
+    "@criblio/app-utils": "^0.8.3",
+    "@criblio/agent-protocol": "^0.4.1",
     "d3-array": "^3.2.0",
     "d3-scale": "^4.0.0",
     "d3-shape": "^3.2.0",

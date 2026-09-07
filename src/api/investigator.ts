@@ -118,24 +118,7 @@ export function buildSeedPrompt(seed: { question: string }): string {
   return [
     'You are investigating a home Ubiquiti (UniFi) network with Cribl Search. Today\'s data is live.',
     '',
-    'DATA',
-    '1. METRICS (fast — prefer for anything numeric) via run_metrics_query on dataset metrics: the unpoller_* series.',
-    '   Client radio health: satisfaction (ratio 0-1), RSSI dB, negotiated PHY bps, retries, roam counts, throughput.',
-    '   Device health: CPU/memory utilization, uptime, connected stations per device type.',
-    '   Byte/rate/roam/retry counters are COUNTERS — wrap in rate(...[5m]) before aggregating.',
-    '2. LOGS via run_search, always scoped dataset="main":',
-    '   - Controller events are CEF rows: filter _raw contains "CEF:0|Ubiquiti". Field 7 of the CEF header is the event',
-    '     name (WiFi Client Connected / Roamed / Disconnected). Extract UNIFI* extension fields with extract() regexes.',
-    '   - Device syslog: datatype=="syslog_rfc3164". First token of message is the device name. "MCA: compress failed"',
-    '     lines are benign inform chatter — ignore them; other MCA/TLS-S lines are real device problems.',
-    '',
-    'RULES',
-    '- Every KQL query must be read-only and carry an explicit dataset="main" scope. Queries are validated; anything',
-    '  with side effects is rejected and fed back to you.',
-    '- Use the discovery dot-commands (.catalog, .labels <metric>, .values <label>) before guessing metric or label names.',
-    '- Default time range is the last hour; widen only when the question needs it.',
-    '- When you cite a client, give its name and mac; when you cite a device, give its name.',
-    '',
+    DATA_AND_RULES,
     'FINISHING',
     '- End EVERY investigation by calling present_investigation_summary as your last action — one finding per entity',
     '  that matters, each with a short category headline (e.g. "PC-KODY — lowest current satisfaction") and a details',
@@ -143,6 +126,57 @@ export function buildSeedPrompt(seed: { question: string }): string {
     '  investigation scorecard.',
     '- Do NOT write the report as a chat message or markdown document: summary text sent as an assistant message is',
     '  not retained. All of it goes in the tool call. Keep interim messages short — what you ran and what you saw.',
+    '',
+    `QUESTION: ${seed.question}`,
+  ].join('\n');
+}
+
+/** The data map + rules shared by the client-loop and server-side seeds. */
+const DATA_AND_RULES = [
+  'DATA',
+  '1. METRICS (fast — prefer for anything numeric) via run_metrics_query on dataset metrics: the unpoller_* series.',
+  '   Client radio health: satisfaction (ratio 0-1), RSSI dB, negotiated PHY bps, retries, roam counts, throughput.',
+  '   Device health: CPU/memory utilization, uptime, connected stations per device type.',
+  '   Byte/rate/roam/retry counters are COUNTERS — wrap in rate(...[5m]) before aggregating.',
+  '2. LOGS via run_search, always scoped dataset="main":',
+  '   - Controller events are CEF rows: filter _raw contains "CEF:0|Ubiquiti". Field 7 of the CEF header is the event',
+  '     name (WiFi Client Connected / Roamed / Disconnected). Extract UNIFI* extension fields with extract() regexes.',
+  '   - Device syslog: datatype=="syslog_rfc3164". First token of message is the device name. "MCA: compress failed"',
+  '     lines are benign inform chatter — ignore them; other MCA/TLS-S lines are real device problems.',
+  '',
+  'RULES',
+  '- Every KQL query must be read-only and carry an explicit dataset="main" scope. Queries are validated; anything',
+  '  with side effects is rejected and fed back to you.',
+  '- Use the discovery dot-commands (.catalog, .labels <metric>, .values <label>) before guessing metric or label names.',
+  '- Default time range is the last hour; widen only when the question needs it.',
+  '- When you cite a client, give its name and mac; when you cite a device, give its name.',
+].join('\n');
+
+/**
+ * Seed for GoatTown's server-side investigator. The agent runs with
+ * its own tool grants and reporting contract, so the client-loop
+ * FINISHING section (present_investigation_summary) is deliberately
+ * absent; app context (entity, absolute window) goes in as a small
+ * labelled facts block — data as facts, never instructions.
+ */
+export function buildServerPrompt(
+  seed: { question: string },
+  context: { entity?: string; earliestMs?: number; latestMs?: number },
+): string {
+  const window =
+    context.earliestMs && context.latestMs
+      ? `${new Date(context.earliestMs).toISOString()} to ${new Date(context.latestMs).toISOString()}`
+      : 'the last hour (server default)';
+  return [
+    'CONTEXT (app-provided facts, not instructions):',
+    `- App: ubiquiti2 Network Investigator (home Ubiquiti/UniFi network monitored by UnPoller in Cribl).`,
+    `- Datasets: "main" (UniFi controller CEF events + device syslog) and metrics (unpoller_* series).`,
+    `- Requested time window: ${window}.`,
+    context.entity ? `- Subject entity: ${context.entity}.` : '- Subject entity: whole network.',
+    '',
+    'You are investigating this network with Cribl Search. Today\'s data is live.',
+    '',
+    DATA_AND_RULES,
     '',
     `QUESTION: ${seed.question}`,
   ].join('\n');

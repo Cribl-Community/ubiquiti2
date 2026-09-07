@@ -21,7 +21,7 @@ export default function ClientDetailPage() {
     let cancelled = false;
     const q = (query: string, step?: number) => queryMetric(query, step, tr.earliest); setEventsLoading(true);
     void q(`unpoller_client_uptime_seconds{name="${name}"}`).then(async identity => {
-      const labels = identity.at(-1)?.labels ?? {}; const wired = labels.wired === 'true'; const mac = labels.mac ?? '';
+      const labels = identity.at(-1)?.labels ?? {}; const wired = labels.wired === 'true';
       if (cancelled) return;
       setInfo(i => ({ ...i, ap: labels.ap_name ?? '', network: labels.essid ?? labels.network ?? '', ip: labels.ip ?? '', mac: labels.mac ?? '', wired: wired ? 'true' : 'false', swName: labels.sw_name ?? '', swPort: labels.sw_port ?? '', uptime: identity.at(-1) ? String(identity.at(-1)!.value) : '' }));
       const selector = labels.mac ? `mac="${labels.mac}"` : `name="${name}"`;

@@ -37,7 +37,7 @@ export default function SwitchesPage() {
       const clientMap = new Map(clientBySwitch.map(r => [r.labels?.sw_name ?? '', r.value]));
       const cpu = new Map<string, number>(); const memory = new Map<string, number>(); const temps = new Map<string, number>();
       return Promise.all([instant('100 * unpoller_device_cpu_utilization_ratio{type="usw"}'), instant('100 * unpoller_device_memory_utilization_ratio{type="usw"}'), instant('unpoller_device_temperature_celsius{type="usw"}')]).then(([cpuRows, memoryRows, tempRows]) => {
-        cpuRows.forEach(r => cpu.set(r.labels?.name ?? '', r.value)); memoryRows.forEach(r => memory.set(r.labels?.name ?? '', r.value)); tempsRows: tempRows.forEach(r => temps.set(r.labels?.name ?? '', r.value));
+        cpuRows.forEach(r => cpu.set(r.labels?.name ?? '', r.value)); memoryRows.forEach(r => memory.set(r.labels?.name ?? '', r.value)); tempRows.forEach(r => temps.set(r.labels?.name ?? '', r.value));
         setSwitches(info.map(r => { const name = r.labels?.name ?? 'Unknown'; return { name, clients: clientMap.get(name) ?? null, poe: null, temp: temps.get(name) ?? null, cpu: cpu.get(name) ?? null, memory: memory.get(name) ?? null }; }));
         setCount(countRows[0]?.value ?? null); setClients(clientRows[0]?.value ?? null); setPoe(poeRows[0]?.value ?? null); setHot(hotRows[0]?.value ?? null);
         setPoeItems(portPoe.filter(r => r.value > 0).map(r => ({ label: `${r.labels?.name ?? 'Unknown'} · ${r.labels?.port_name ?? r.labels?.port_num ?? 'Port'}`, value: r.value })).sort((a, b) => b.value - a.value));

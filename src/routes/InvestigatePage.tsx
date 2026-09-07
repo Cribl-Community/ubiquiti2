@@ -8,6 +8,7 @@ import MetricsToolCard from '@criblio/app-utils/investigator/metrics-tool-card';
 import type { MetricsQueryUi } from '@criblio/app-utils/agent-tools';
 import { exportAsPng } from '@criblio/app-utils/investigator';
 import { titleFromPrompt } from '@criblio/agent-protocol';
+import { isTerminalStatus } from '@criblio/agent-protocol';
 import type { SessionStatus } from '@criblio/agent-protocol';
 import {
   buildServerPrompt,
@@ -225,15 +226,11 @@ export default function InvestigatePage() {
       setError(null);
       const window = contextWindow();
       const entity = question.match(/(?:access point|switch|client|gateway)\s+"([^"]+)"/i)?.[1];
-      try {
-        const { id } = await createInvestigation(connection, member, {
-          agent: connection.agent,
-          prompt: buildServerPrompt({ question }, { entity, ...window }),
-          title: titleFromPrompt(question),
-        });
+      const title = titleFromPrompt(question);
+      const attach = (id: string, initialStatus: SessionStatus) => {
         setEntries([{ kind: 'user', id: 'local-open', content: question }]);
-        setStatus('queued');
-        setActiveTitle(titleFromPrompt(question));
+        setStatus(initialStatus);
+        setActiveTitle(title);
         feedRef.current?.stop();
         const feed = new InvestigationFeed(connection, member, id, {
           onBatch: (batch) => {
@@ -258,15 +255,53 @@ export default function InvestigatePage() {
         feedRef.current = feed;
         feed.start(0);
         setActiveId(id);
+      };
+      try {
+        const { id } = await createInvestigation(connection, member, {
+          agent: connection.agent,
+          prompt: buildServerPrompt({ question }, { entity, ...window }),
+          title,
+        });
+        attach(id, 'queued');
         await saveSessionState(member, { activeId: id, draft: '' });
         setDraft('');
         void refreshHistory(connection, member);
       } catch (err) {
-        setError(
-          err instanceof Error
-            ? `${err.message}${err.message.includes('403') ? ' — the GoatTown host may be missing from config/proxies.yml or the embed token is not provisioned.' : ''}`
-            : String(err),
-        );
+        const message = err instanceof Error ? err.message : String(err);
+        const aborted =
+          (err instanceof DOMException && err.name === 'AbortError') || /abort|timed?\s?out/i.test(message);
+        if (!aborted) {
+          setError(
+            `${message}${message.includes('403') ? ' — the GoatTown host may be missing from config/proxies.yml or the embed token is not provisioned.' : ''}`,
+          );
+          return;
+        }
+        // Ambiguous create: the request hit its client-side timeout, but
+        // GoatTown may have created the session anyway. Reconcile against
+        // server history instead of retrying (a retry would duplicate it).
+        try {
+          const history = await listInvestigations(connection, member, connection.agent);
+          const recent = (ts: number) =>
+            (Date.now() - ts < 10 * 60_000) || (Date.now() / 1000 - ts < 600);
+          const candidate = history.find((h) => recent(h.createdAt) && !isTerminalStatus(h.status));
+          if (!candidate) {
+            setError(
+              'The create request timed out before GoatTown answered, and no new session is visible yet — check Past investigations in a moment.',
+            );
+            return;
+          }
+          attach(candidate.id, candidate.status);
+          await saveSessionState(member, { activeId: candidate.id, draft: '' });
+          setDraft('');
+          setError(
+            `The create request timed out client-side, but GoatTown did start the session — attached to ${candidate.id.slice(0, 8)}…`,
+          );
+          void refreshHistory(connection, member);
+        } catch (reconcileErr) {
+          setError(
+            `The create request timed out and reconciling history failed: ${reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr)}`,
+          );
+        }
       } finally {
         setBusy(null);
       }
@@ -357,9 +392,6 @@ export default function InvestigatePage() {
   }, []);
 
   const running = status === 'running' || status === 'queued';
-  const hasPendingApproval = entries.some(
-    (e) => e.kind === 'toolCall' && e.status === 'pending',
-  );
 
   const renderToolCard = (ui: { kind: string } & Record<string, unknown>) => {
     if (ui.kind === 'metrics') return <MetricsToolCard ui={ui as MetricsQueryUi} />;

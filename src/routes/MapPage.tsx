@@ -123,7 +123,17 @@ export default function MapPage(){
         const l=p.labels??{};const mac=l.mac??l.name;if(!mac||seen.has(mac))return;seen.add(mac);
         if(l.wired==='false'||(!l.sw_name&&l.ap_name)){
           const apName=l.ap_name;if(!apName)return;
-          const ap=byName.find(x=>x.kind==='ap'&&x.name===apName);if(!ap)return;
+          let ap=byName.find(x=>x.kind==='ap'&&x.name===apName);
+          if(!ap){
+            /* Client data is authoritative: some firmware exports label APs
+               with a generic type (this network's "AP Office 7" reports
+               type="udm"), and an AP can be missing from device_info
+               entirely. Promote a mislabeled device, or synthesize a node,
+               so its wireless clients still render. */
+            ap=byName.find(x=>x.name===apName);
+            if(ap){ap.kind='ap';}
+            else{ap={id:apName,kind:'ap',mac:'',name:apName,rate:0};byName.push(ap);byMac.set(apName,ap);}
+          }
           const g=groups.get(ap.id)??{apId:ap.id,apName,clients:[]};
           g.clients.push({mac,name:l.name??mac});
           groups.set(ap.id,g);

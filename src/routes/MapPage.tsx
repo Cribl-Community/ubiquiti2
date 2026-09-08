@@ -148,7 +148,7 @@ export default function MapPage(){
       setCpu(pct(cpuRows));setMemory(pct(memoryRows));
       setLoading(false);
     }).catch(()=>setLoading(false));
-  },[tr.range,tr.refreshKey]);
+  },[tr.earliest,tr.range,tr.refreshKey,tr.step]);
 
   const graph=useMemo(()=>{
     const nodes:Node[]=[...devices];

@@ -395,7 +395,11 @@ export default function InvestigatePage() {
 
   const renderToolCard = (ui: { kind: string } & Record<string, unknown>) => {
     if (ui.kind === 'metrics') return <MetricsToolCard ui={ui as MetricsQueryUi} />;
-    if (ui.kind === 'search' || ui.kind === 'summary') return null; // built-in cards
+    // search, summary, code (0.8.5+), and report (0.8.6+) render as
+    // framework built-ins.
+    if (ui.kind === 'search' || ui.kind === 'summary' || ui.kind === 'code' || ui.kind === 'report') {
+      return null;
+    }
     return (
       <div className={s.unknownCard}>
         <strong>Result ({ui.kind})</strong>

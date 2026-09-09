@@ -27,6 +27,19 @@ jobs:
       # supply-chain hygiene every other step here follows (and which
       # `npm run security:static` enforces), not a framework source
       # dependency.
+      # Temporary diagnostics step: runs eslint itself so the full warning
+      # list is the tail of the failed step's log (the release-build action
+      # summarizes lint failures but buries the per-warning lines above the
+      # excerpt window). Removed once the lint regression is resolved.
+      - name: ESLint diagnostics (verbose, fails on warnings)
+        run: |
+          npm install --no-audit --no-fund
+          set +e
+          npx eslint . --max-warnings 0 > eslint-report.txt 2>&1
+          code=$?
+          set -e
+          cat eslint-report.txt
+          if [ "$code" -ne 0 ]; then exit 1; fi
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Retain exact tested candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -263,7 +263,9 @@ export default function InvestigatePage() {
           title,
         });
         attach(id, 'queued');
-        await saveSessionState(member, { activeId: id, draft: '' });
+        /* Session-pointer persistence is best-effort: a KV failure must
+           never detach or blank a live investigation. */
+        await saveSessionState(member, { activeId: id, draft: '' }).catch(() => undefined);
         setDraft('');
         void refreshHistory(connection, member);
       } catch (err) {
@@ -291,7 +293,7 @@ export default function InvestigatePage() {
             return;
           }
           attach(candidate.id, candidate.status);
-          await saveSessionState(member, { activeId: candidate.id, draft: '' });
+          await saveSessionState(member, { activeId: candidate.id, draft: '' }).catch(() => undefined);
           setDraft('');
           setError(
             `The create request timed out client-side, but GoatTown did start the session — attached to ${candidate.id.slice(0, 8)}…`,
@@ -350,7 +352,7 @@ export default function InvestigatePage() {
           setStatus('cancelled');
           setActiveId(null);
           setEntries([]);
-          await saveSessionState(memberId, { activeId: null, draft });
+          await saveSessionState(memberId, { activeId: null, draft }).catch(() => undefined);
         }
         if (action === 'reopen' || action === 'recover') setStatus('idle');
         void refreshHistory(conn, memberId);
@@ -372,7 +374,7 @@ export default function InvestigatePage() {
           setActiveId(null);
           setEntries([]);
           setStatus(null);
-          await saveSessionState(memberId, { activeId: null, draft });
+          await saveSessionState(memberId, { activeId: null, draft }).catch(() => undefined);
         }
         void refreshHistory(conn, memberId);
       } catch (err) {

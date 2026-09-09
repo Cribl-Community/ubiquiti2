@@ -16,7 +16,7 @@
  * Resizes to its container width via ResizeObserver so it composes into
  * flexible grids without per-parent width plumbing.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { scaleLinear, scaleTime } from 'd3-scale';
 import { line as d3Line, area as d3Area, curveMonotoneX } from 'd3-shape';
 import { max as d3Max, min as d3Min, bisector } from 'd3-array';
@@ -82,6 +82,7 @@ export default function LineChart({
   markers,
   onTimeClick,
 }: Props) {
+  const clipId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
@@ -312,6 +313,14 @@ export default function LineChart({
           }}
         >
           <g transform={`translate(${mLeft},${M.top})`}>
+            {/* Series can spike past yMax (bursty gauges); clip to the plot
+                box so nothing escapes the chart frame. Small overflow on
+                top/left leaves room for the 2px stroke at the edges. */}
+            <defs>
+              <clipPath id={clipId}>
+                <rect x={-3} y={-3} width={innerW + 6} height={innerH + 3} />
+              </clipPath>
+            </defs>
             {hasData &&
               tickY.map((t, i) => (
                 <g key={`gy-${i}`}>
@@ -360,20 +369,22 @@ export default function LineChart({
               stroke="var(--cds-color-border)"
               strokeWidth={1}
             />
-            {paths.map((p) =>
-              p.a ? <path key={`a-${p.name}`} d={p.a} fill={p.color} opacity={0.1} /> : null,
-            )}
-            {paths.map((p) => (
-              <path
-                key={p.name}
-                d={p.d}
-                fill="none"
-                stroke={p.color}
-                strokeWidth={drillTarget === p.name ? 3 : 2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ))}
+            <g clipPath={`url(#${clipId})`}>
+              {paths.map((p) =>
+                p.a ? <path key={`a-${p.name}`} d={p.a} fill={p.color} opacity={0.1} /> : null,
+              )}
+              {paths.map((p) => (
+                <path
+                  key={p.name}
+                  d={p.d}
+                  fill="none"
+                  stroke={p.color}
+                  strokeWidth={drillTarget === p.name ? 3 : 2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ))}
+            </g>
             {hasData &&
               xScale &&
               (markers ?? []).map((t, i) => {

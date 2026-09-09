@@ -96,7 +96,9 @@ export const toolDefinitions = [
       'unpoller_client_transmit_retries_total (counter), unpoller_client_roam_count_total (counter, group by ap_name), ' +
       'unpoller_client_uptime_seconds — labels: name, mac, ap_name, essid, radio_proto, radio_chan, wired. ' +
       'Devices: unpoller_device_cpu_utilization_ratio, unpoller_device_memory_utilization_ratio, ' +
-      'unpoller_device_uptime_seconds, unpoller_device_stations{type="uap"|"usw"|"ugw",name}, unpoller_device_info. ' +
+      'unpoller_device_uptime_seconds, unpoller_device_stations{type="uap"|"udm"|"usw"|"ugw",name}, unpoller_device_info. ' +
+      'IMPORTANT: Dream-Machine-AP-class hardware (model UDMA*) reports type="udm" but acts as an AP — 9 of these APs exist; ' +
+      'the only real gateway is model UDMPROSE. Do not treat type="udm" as gateway-only, and do not filter APs by type="uap". ' +
       'Sites: unpoller_site_users / _guests / _iots / _aps / _switches / _gateways, unpoller_site_latency_seconds, ' +
       'unpoller_site_transmit_rate_bytes / _receive_rate_bytes, unpoller_site_intenet_drops_total (counter). ' +
       'Start discovery with .catalog unpoller or .labels unpoller_client_satisfaction_ratio.',

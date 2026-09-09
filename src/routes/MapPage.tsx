@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { NetworkGraph, type ForceLink, type ForceNode } from '@criblio/app-utils/graph';
-import { queryMetric, type MetricPoint } from '../api/metrics';
+import { queryMetric, queryMeshEdges, type MeshEdge, type MetricPoint } from '../api/metrics';
 import { investigatePrompt } from '../api/investigator';
+import { loadMeshLinksText, parseMeshLinks } from '../api/goattown';
 import { useTimeRange } from '../components/TimeRange';
 import s from './MapPage.module.css';
 
@@ -63,8 +64,18 @@ export default function MapPage(){
   const [pinned,setPinned]=useState<string|null>(null);
   const [hovered,setHovered]=useState<Node|null>(null);
   const [loading,setLoading]=useState(true);
+  const [meshEdges,setMeshEdges]=useState<MeshEdge[]>([]);
   const mapRef=useRef<HTMLElement>(null);
   const [size,setSize]=useState({width:1450,height:700});
+
+  /* Mesh backhaul from unpoller's topology metrics (WIRELESS experience-
+     score edges). Refreshed on the time-range refresh action only; the
+     query helper never throws (failures render as empty). */
+  useEffect(()=>{
+    const c=new AbortController();
+    queryMeshEdges().then(setMeshEdges).catch(()=>setMeshEdges([]));
+    return()=>c.abort();
+  },[tr.refreshKey]);
 
   useEffect(()=>{
     const el=mapRef.current;if(!el)return;
@@ -85,13 +96,19 @@ export default function MapPage(){
       queryMetric('sum by (name) (rate(unpoller_device_vap_transmit_bytes_total[5m]))',tr.step,tr.earliest),
       queryMetric('100 * max by (name) (unpoller_device_cpu_utilization_ratio)',tr.step,tr.earliest),
       queryMetric('100 * max by (name) (unpoller_device_memory_utilization_ratio)',tr.step,tr.earliest),
-    ]).then(([devicesQ,topologyQ,clients,clientRx,clientTx,switchRx,switchTx,vapRx,vapTx,cpuRows,memoryRows])=>{
+      /* non-fatal: a KV failure (missing key, preview sandbox, proxy hiccup)
+         must never take down the whole map — mesh edges are optional. */
+      loadMeshLinksText().catch(() => null as string | null),
+    ]).then(([devicesQ,topologyQ,clients,clientRx,clientTx,switchRx,switchTx,vapRx,vapTx,cpuRows,memoryRows,meshText])=>{
       /* devices */
       const byMac=new Map<string,Node>();
       devicesQ.forEach(p=>{
         const l=p.labels??{};const mac=l.mac;if(!mac)return;
         const t=(l.type??'').toLowerCase();
-        const kind=t==='udm'?'gateway':t==='uap'?'ap':'switch';
+        /* UniFi reports Dream-Machine-AP-class hardware (model UDMA*, e.g.
+           UDMA69B) as type="udm" — they are APs, not gateways. Only UDM*
+           models (UDMPROSE etc.) render as the gateway. */
+        const kind=t==='udm'?(/^UDMA/.test(l.model??'')?'ap':'gateway'):t==='uap'?'ap':'switch';
         byMac.set(mac,{id:mac,kind,mac,name:l.name??mac,rate:0});
       });
       const byName=[...byMac.values()];
@@ -152,6 +169,18 @@ export default function MapPage(){
         return (a&&b)?{source:a.id,target:b.id,rate:b.rate,kind:(l.link_type??'WIRED').toLowerCase()==='wireless'?'wireless':'wired'} as Edge:null;
       }).filter((e):e is Edge=>e!==null);
 
+      /* mesh backhaul: the export carries no wireless uplinks, so the
+         child→parent pairs come from Settings. Resolve by node name and
+         promote the child to an AP node even when it has no clients of
+         its own (a bare mesh extender reports no ap_name). */
+      const nodeByName=new Map(byName.map(n=>[n.name,n] as const));
+      for(const [child,parent] of parseMeshLinks(meshText)){
+        const c=nodeByName.get(child),p=nodeByName.get(parent);
+        if(!c||!p||c===p)continue;
+        if(c.kind!=='ap')c.kind='ap';
+        links.push({source:p.id,target:c.id,rate:c.rate,kind:'wireless'} as Edge);
+      }
+
       const pct=(rows:MetricPoint[])=>{const m=new Map<string,number>();rows.forEach(p=>{const n=p.labels?.name;if(n)m.set(n,p.value)});return m};
       setDevices(byName);setTopology(links);setWiredGroups([...wired.values()]);
       setWireless([...groups.values()]);setClientRates(rates);setTrafficSeries(series);
@@ -161,8 +190,23 @@ export default function MapPage(){
   },[tr.earliest,tr.range,tr.refreshKey,tr.step]);
 
   const graph=useMemo(()=>{
-    const nodes:Node[]=[...devices];
+    /* shallow per-memo copies: feed-driven kind promotion below must not
+       mutate the devices state objects. */
+    const nodes:Node[]=devices.map(d=>({...d}));
     const links:Edge[]=[...topology];
+    /* mesh backhaul from the patched unpoller build's uplink metrics:
+       child AP = name, parent = uplink_device name (uplink_mac fallback).
+       Promote the child to an AP on the memo-local copy even when it has
+       no clients of its own. */
+    const byName=new Map(nodes.filter(n=>n.name).map(n=>[n.name as string,n] as const));
+    const byMac=new Map(nodes.filter(n=>n.mac).map(n=>[n.mac as string,n] as const));
+    for(const e of meshEdges){
+      const child=byName.get(e.childName);
+      const parent=byName.get(e.parentName)??byMac.get(e.parentMac);
+      if(!child||!parent||child===parent)continue;
+      if(child.kind!=='ap')child.kind='ap';
+      links.push({source:parent.id,target:child.id,rate:e.rate||child.rate,kind:'wireless'} as Edge);
+    }
     for(const g of wireless){
       const total=g.clients.reduce((s,c)=>s+(clientRates.get(c.mac)??clientRates.get(c.name)??0),0);
       const isSingle=g.clients.length===1;
@@ -198,7 +242,7 @@ export default function MapPage(){
       }
     });
     return {nodes,links};
-  },[devices,topology,wireless,wiredGroups,clientRates,expanded]);
+  },[devices,topology,wireless,wiredGroups,clientRates,expanded,meshEdges]);
 
   const activeNode=graph.nodes.find(n=>n.id===(pinned??hovered?.id))??hovered;
   const nodeTraffic=activeNode?.rate??0;

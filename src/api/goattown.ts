@@ -43,12 +43,65 @@ async function kvGet(key: string): Promise<string | null> {
 }
 
 async function kvPut(key: string, value: string): Promise<void> {
-  const resp = await fetch(`${apiUrl()}/kvstore/${key}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'text/plain' },
-    body: value,
-  });
-  if (!resp.ok) throw new Error(`KV write failed (${resp.status})`);
+  const put = (k: string) =>
+    fetch(`${apiUrl()}/kvstore/${k}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: value,
+    });
+  const resp = await put(key);
+  if (resp.ok) return;
+  if (resp.status === 404) {
+    // Cribl KV requires intermediate path segments to exist (PUT
+    // goattown/sessions/{id} 404s unless goattown/sessions does). A
+    // reinstall can clear them — recreate the missing parents, then retry.
+    const parts = key.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join('/');
+      const r = await fetch(`${apiUrl()}/kvstore/${parent}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'text/plain' },
+        body: '',
+      });
+      if (!r.ok && r.status !== 404) throw new Error(`KV write failed (${r.status})`);
+    }
+    const retry = await put(key);
+    if (retry.ok) return;
+    throw new Error(`KV write failed (${retry.status})`);
+  }
+  throw new Error(`KV write failed (${resp.status})`);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Network map — mesh backhaul (child AP → parent AP)
+// ─────────────────────────────────────────────────────────────────
+
+/** The Unifi Poller's Prometheus export carries no wireless-uplink
+ *  identity: every topology row is link_type="WIRED" and the uplink
+ *  metrics expose no parent MAC/name. Mesh parents are therefore
+ *  user-configured in Settings and stored as plain text. */
+const MESH_KEY = 'network/mesh-links';
+
+export async function loadMeshLinksText(): Promise<string | null> {
+  return kvGet(MESH_KEY);
+}
+
+export async function saveMeshLinksText(text: string): Promise<void> {
+  return kvPut(MESH_KEY, text.trim());
+}
+
+/** Parse `child = parent` lines (`->` and `→` accepted too). Blank
+ *  lines and `#` comments are ignored. */
+export function parseMeshLinks(text: string | null): Array<[child: string, parent: string]> {
+  if (!text) return [];
+  const out: Array<[string, string]> = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const m = t.match(/^(.+?)\s*(?:->|=|→)\s*(.+)$/);
+    if (m) out.push([m[1].trim(), m[2].trim()]);
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────

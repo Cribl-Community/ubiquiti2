@@ -4,8 +4,10 @@ import {
   DEFAULT_AGENT,
   connectionDiagnostics,
   loadConnection,
+  loadMeshLinksText,
   saveConnection,
   saveEmbedToken,
+  saveMeshLinksText,
   type ConnectionDiagnostics,
 } from '../api/goattown';
 
@@ -55,6 +57,10 @@ export default function SettingsPage() {
   const [gtToken, setGtToken] = useState('');
   const [diag, setDiag] = useState<ConnectionDiagnostics | null>(null);
 
+  const [meshText, setMeshText] = useState('');
+  const [meshSaved, setMeshSaved] = useState(false);
+  const [meshError, setMeshError] = useState<string | null>(null);
+
   const refreshDiag = useCallback(async () => {
     setDiag(await connectionDiagnostics());
   }, []);
@@ -67,6 +73,7 @@ export default function SettingsPage() {
         setGtAgent(conn.agent);
       }
     });
+    void loadMeshLinksText().then((t) => setMeshText(t ?? ''));
     void refreshDiag();
   }, [refreshDiag]);
 
@@ -106,6 +113,17 @@ export default function SettingsPage() {
     }
   }, [settings]);
 
+  const handleSaveMesh = useCallback(async () => {
+    setMeshError(null);
+    try {
+      await saveMeshLinksText(meshText);
+      setMeshSaved(true);
+      setTimeout(() => setMeshSaved(false), 2000);
+    } catch (e) {
+      setMeshError(e instanceof Error ? e.message : String(e));
+    }
+  }, [meshText]);
+
   return (
     <div style={{ maxWidth: 600 }}>
       <h1 style={{ marginBottom: 16 }}>Settings</h1>
@@ -143,6 +161,46 @@ export default function SettingsPage() {
         }}
       >
         Save
+      </button>
+
+      <hr style={{ margin: '24px 0', border: 'none', borderTop: '1px solid var(--cds-color-border-subtle)' }} />
+
+      <h2 style={{ marginBottom: 12, fontSize: 'var(--cds-font-size-lg)' }}>Network map — mesh backhaul</h2>
+      <p style={{ fontSize: 'var(--cds-font-size-sm)', color: 'var(--cds-color-fg-muted)', marginBottom: 12 }}>
+        Mesh parents are drawn automatically from unpoller's topology metrics (WIRELESS links
+        whose ends are both known devices). Any entry here overrides the feed. One link per
+        line: <code>child AP = parent AP</code>. APs appear once they report clients or device
+        info; names must match the controller exactly.
+      </p>
+      {meshError && <StatusBanner kind="error">{meshError}</StatusBanner>}
+      {meshSaved && <StatusBanner kind="info">Mesh backhaul saved — refresh the map to see it</StatusBanner>}
+      <textarea
+        rows={4}
+        placeholder={'AP Living Room 7 = AP Office 7\nAP Family Room 7 = AP Office 7'}
+        value={meshText}
+        onChange={(e) => setMeshText(e.target.value)}
+        style={{
+          width: '100%',
+          padding: '8px 12px',
+          border: '1px solid var(--cds-color-border)',
+          borderRadius: 'var(--cds-radius-md)',
+          fontFamily: 'var(--cds-font-family-mono)',
+          fontSize: 'var(--cds-font-size-sm)',
+          marginBottom: 12,
+        }}
+      />
+      <button
+        onClick={() => void handleSaveMesh()}
+        style={{
+          padding: '8px 20px',
+          background: 'var(--cds-color-primary)',
+          color: 'var(--cds-color-primary-fg)',
+          border: 'none',
+          borderRadius: 'var(--cds-radius-md)',
+          fontWeight: 600,
+        }}
+      >
+        Save mesh backhaul
       </button>
 
       <hr style={{ margin: '24px 0', border: 'none', borderTop: '1px solid var(--cds-color-border-subtle)' }} />

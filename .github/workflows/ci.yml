@@ -52,7 +52,7 @@ jobs:
           # Compact, one violation per line, printed ABSOLUTELY LAST so the
           # bounded log tail captures the actual warnings (file:line:col
           # severity message rule-name).
-          grep -E '(warning|error)' eslint-report.txt | tail -n 40 || true
+          grep -E ':[0-9]+:[0-9]+[[:space:]]+warning' eslint-report.txt | tail -n 10 || true
           if [ "$code" -ne 0 ]; then exit 1; fi
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Retain exact tested candidate

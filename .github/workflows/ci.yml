@@ -39,7 +39,20 @@ jobs:
           code=$?
           set -e
           cat eslint-report.txt
-          if [ "$code" -ne 0 ]; then exit 1; fi
+          # Compact, one warning per line, LAST so bounded log tails capture
+          # the actual violations (file:line:col  message  rule-name).
+          grep -E '(warning|error)' eslint-report.txt | tail -n 40 || true
+          if [ "$code" -ne 0 ]; then
+            # Mirror the report into the run summary so the warnings are
+            # readable on the run page without opening logs.
+            {
+              echo '## ESLint warnings (max-warnings=0 gate)'
+              echo '```'
+              cat eslint-report.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Retain exact tested candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -35,24 +35,25 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           set +e
-          npx eslint . --max-warnings 0 --format unix > eslint-report.txt 2>&1
+          npx eslint . --max-warnings 0 --format json > eslint-report.json 2> eslint-stderr.txt
           code=$?
           set -e
-          cat eslint-report.txt
+          # One line per violation (unix formatter left eslint core in v9).
+          node -e 'const r=require("./eslint-report.json");let n=0;for(const f of r){for(const m of f.messages){n++;console.log(f.filePath.replace(process.cwd()+"/","")+":"+m.line+":"+m.column+": "+(m.severity===1?"warning":"error")+": "+m.message+" ["+m.ruleId+"]")}}console.log("total: "+n+" problem(s)")' > violations.txt 2>&1 || true
+          cat eslint-stderr.txt || true
+          cat violations.txt
           if [ "$code" -ne 0 ]; then
-            # Mirror the report into the run summary so the warnings are
-            # readable on the run page without opening logs.
+            # Mirror the violations into the run summary so they are readable
+            # on the run page without opening logs.
             {
-              echo '## ESLint warnings (max-warnings=0 gate)'
+              echo '## ESLint violations (max-warnings=0 gate)'
               echo '```'
-              cat eslint-report.txt
+              cat violations.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-          # One line per violation with --format unix; the last TWO lines =
-          # [violation line, eslint's max-warnings note] — fits the bounded
-          # log tail window no matter how small.
-          tail -n 2 eslint-report.txt || true
+          # Violation lines printed ABSOLUTELY LAST for the bounded log tail.
+          tail -n 3 violations.txt || true
           if [ "$code" -ne 0 ]; then exit 1; fi
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Retain exact tested candidate

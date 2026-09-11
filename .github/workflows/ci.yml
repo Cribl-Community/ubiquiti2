@@ -27,34 +27,10 @@ jobs:
       # supply-chain hygiene every other step here follows (and which
       # `npm run security:static` enforces), not a framework source
       # dependency.
-      # Temporary diagnostics step: runs eslint itself so the full warning
-      # list is the tail of the failed step's log (the release-build action
-      # summarizes lint failures but buries the per-warning lines above the
-      # excerpt window). Removed once the lint regression is resolved.
-      - name: ESLint diagnostics (verbose, fails on warnings)
-        run: |
-          npm install --no-audit --no-fund
-          set +e
-          npx eslint . --max-warnings 0 --format json > eslint-report.json 2> eslint-stderr.txt
-          code=$?
-          set -e
-          # One line per violation (unix formatter left eslint core in v9).
-          node -e 'const r=require("./eslint-report.json");let n=0;for(const f of r){for(const m of f.messages){n++;console.log(f.filePath.replace(process.cwd()+"/","")+":"+m.line+":"+m.column+": "+(m.severity===1?"warning":"error")+": "+m.message+" ["+m.ruleId+"]")}}console.log("total: "+n+" problem(s)")' > violations.txt 2>&1 || true
-          cat eslint-stderr.txt || true
-          cat violations.txt
-          if [ "$code" -ne 0 ]; then
-            # Mirror the violations into the run summary so they are readable
-            # on the run page without opening logs.
-            {
-              echo '## ESLint violations (max-warnings=0 gate)'
-              echo '```'
-              cat violations.txt
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-          # Violation lines printed ABSOLUTELY LAST for the bounded log tail.
-          tail -n 3 violations.txt || true
-          if [ "$code" -ne 0 ]; then exit 1; fi
+      # NOTE: a temporary eslint-diagnostics step used to live here
+      # (verbose lint output to locate the single unused-disable-directive
+      # warning); removed 2026-09-11 after fixing src/main.tsx:12. If lint
+      # regresses, `npx eslint . --max-warnings 0 --format json` reproduces it.
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Retain exact tested candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

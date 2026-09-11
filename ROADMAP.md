@@ -292,25 +292,32 @@ L > 3 days (single maintainer).
 | # | Item | Status |
 |---|---|---|
 | 1 | **ISP truth panel** — speed-test down/up/latency + "last test" age on `/gateway`, fixed 7-day window | **Done** |
-| 2 | **Per-client app visibility** — upload-side DPI list on `/clients/:clientName` | **Done** (upload DPI); packet rates still open |
-| 3 | **RF detail on AP detail** — transmit retry *rate* by band + KPI. Airtime split / retries / beacons: see §2.1, mostly unusable | **Partly** (retry rate done; per-band channel/width/NSS/TX-power audit row still open) |
+| 2 | **Per-client app visibility** — upload-side DPI list on `/clients/:clientName` | **Done** (upload DPI + packet volume) |
+| 3 | **RF detail on AP detail** — transmit retry *rate* by band + per-band radio configuration table | **Done** (airtime split / beacons: see §2.1, unusable) |
 | 4 | **Per-SSID health** — `vap_*` metrics | **Retired**: all `vap_*` values are 0 here (§2.1) |
-| 5 | **Wired/fabric hygiene** — transmit-side port errors/drops, broadcast/multicast rates, port-speed mismatch | Open (do **not** use `port_satisfaction_ratio` alone) |
+| 5 | **Wired/fabric hygiene** — live per-port table (link speed, rates, PoE, err+drops, broadcast/multicast) | **Done** (replaced a hardcoded empty stub) |
 | 6 | **Inventory drift** — adopted / offline / pending tiles on Overview | **Done** |
-| 7 | **DHCP + firewall inventory** — `dhcp_{is_static,lease_end}`, `firewall_rule_{enabled,index}` | Open |
+| 7 | **DHCP + firewall inventory** — pool tiles + firewall summary on `/gateway`; per-client DHCP state and lease countdown on `/clients` | **Done** (per-rule firewall inventory still open) |
 
 1. ~~**ISP truth panel**~~ — delivered; see the validation table for the second-WAN caveat.
-2. **Per-client app visibility** — upload side done; add DPI packet rates for "who is saturating
-   the link" rather than "who transferred most bytes". Accept: per-client top apps, receive *and* transmit.
-3. **RF detail on AP detail** — retry rate done. Remaining: a per-band audit row (channel, width,
-   NSS, TX power) — these must be rendered per band, since `max()` across bands is meaningless for a
-   channel number. Accept: values shown per band with the band they belong to.
+2. ~~**Per-client app visibility**~~ — delivered (upload DPI + packet volume).
+3. ~~**RF detail on AP detail**~~ — delivered (retry rate + per-band configuration table).
+   Configuration values are constant per radio and must be read **per band** — never summed.
 4. **Per-SSID health** — **retired** (§2.1): `vap_ccq_ratio` and `vap_dns_latency_average_seconds`
    are 0 on every VAP in this deployment. Revisit only if a controller/firmware change populates them.
-5. **Wired/fabric hygiene** — transmit-side port errors/drops, `port_satisfaction_ratio` (with the
-   AP-port caveat), broadcast/multicast rates (storm detector), `port_speed_bps` mismatch audit.
+5. ~~**Wired/fabric hygiene**~~ — delivered: `/switches/:switchName` now builds its port table from
+   `unpoller_device_port_*` (link speed, both directions, PoE, err+drops, broadcast/multicast per
+   port), plus a "Ports with errors" KPI. The table previously rendered an empty hardcoded array.
+   Still open here: a link-speed-mismatch audit (a 2.5 Gbps-capable port at 100 Mbps) and SFP
+   diagnostics (`port_sfp_{rx,tx}_power`, only 2 series — one switch).
 6. ~~**Inventory drift**~~ — delivered as three Overview tiles.
-7. **DHCP + firewall inventory** — `dhcp_{is_static,lease_end}`, `firewall_rule_{enabled,index}`.
+7. ~~**DHCP + firewall inventory**~~ — delivered: `/gateway` gains DHCP pool utilization, free-IP count
+   and firewall rule counts; `/clients` gains **DHCP** (Static/Dynamic) and **Lease ends** columns,
+   joined on MAC from `unpoller_dhcp_is_static` / `unpoller_dhcp_lease_end` (85 leases, of which the
+   `Servers` network holds the static reservations). Still open: a per-rule firewall inventory from
+   `unpoller_firewall_rule_{enabled,index}` — 11 named rules with zones, protocol, action — and
+   `unpoller_firewall_rules_by_action`; `firewall_rules_disabled` is currently 0 of 66, so the summary
+   tiles are informational rather than actionable.
 
 ### Phase 1 — Health score with attribution (M)
 *Goal: the one-line verdict.*

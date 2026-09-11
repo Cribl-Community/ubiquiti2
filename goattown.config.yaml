@@ -1,0 +1,323 @@
+version: 1
+producer: ubiquiti2
+
+skills:
+  - name: ubiquiti-network-observability
+    displayName: Ubiquiti network observability
+    description: >-
+      Validated metric facts, dead-metric traps, alerting architecture and app
+      conventions for this household UniFi network, so these conclusions are not
+      re-derived every session.
+    kind: prose
+    body: |
+      # Ubiquiti / UniFi network observability
+      
+      Procedures and validated facts for investigating this household's UniFi network. The
+      app `ubiquiti2` is the presentation layer; this skill is the *knowledge* layer, so the
+      same conclusions do not have to be re-derived from scratch.
+      
+      **Scope**: UniFi gateway, switches, APs and clients observed through unpoller metrics in
+      the Cribl metrics store, plus the app's own Search datasets and alert state.
+      
+      ---
+      
+      ## 0. Environment facts (do not re-litigate)
+      
+      - Metrics arrive via **unpoller's Prometheus exporter** → **remote write** into this
+        workspace's metrics store. The exporter is a **patched build** (`export-uplink-topology`,
+        `uplink-parent-fields`). If the container is ever rebuilt from `ghcr.io/unpoller/unpoller`,
+        the `unpoller_device_uplink_*` families silently disappear. Check the catalogue before
+        concluding "topology is unavailable".
+      - **Read metrics with `run_metrics_query`** (PromQL). Supported: core PromQL only —
+        `label_replace` and vector `or` are **not** available, and `{__name__=~"a|b"}` style
+        regex-name queries fail. Discover instead of guessing:
+        `.catalog <substring>` → `.labels <metric>` → `.values <label>` → `.series <metric>`.
+      - **`$vt_results` is for event/row-shaped output only.** Metric-shaped questions go to the
+        metrics store. Do not compute a threshold, ratio or counter in a Search query and park it
+        in a result set.
+      - Notification targets already exist — reference them **by ID** (`typhoon_ntfy`,
+        `criblapm_cell_webhook`). Never ask a human to paste a webhook URL.
+      - **Do not modify Cribl Stream or the unpoller host** to answer an observability question.
+        An earlier Stream scraper rollout for this network was explicitly rolled back; a Stream
+        change needs a fresh, explicit request.
+      
+      ## 1. Metric truth table
+      
+      ### Trustworthy — build on these
+      
+      | Metric | Notes |
+      |---|---|
+      | `unpoller_device_uplink_info` / `_up` | **parent device name is a label** (`uplink_device`), no join needed. `uplink_type` is `wire` or `wireless`. `info` is a constant `1` — the labels are the payload; never filter on its value. |
+      | `unpoller_device_uplink_tx_rate` / `rx_rate` | populated on **wireless** (mesh backhaul), zero on wire |
+      | `unpoller_device_uplink_tx_bytes_rate` / `rx_bytes_rate` | populated on **wire**, zero on wireless |
+      | `unpoller_device_radio_channel` / `_ht` / `_nss` / `_transmit_power` | *configuration* values; the channel is the **metric value**, not a label. Read **per band** — a `max()` across bands is meaningless for a channel number |
+      | `unpoller_device_port_*` | 24 families. Real: `port_speed_bps`, `receive_rate_bytes`, `transmit_rate_bytes`, `poe_watts`, `receive_errors_total`, `receive_dropped_total`, `transmit_errors_total`, `transmit_dropped_total`, `receive_broadcast_total`, `receive_multicast_total`. Unused on this hardware: broadcast/packets/transmit-dropped of the plain counters |
+      | `unpoller_dhcp_*` | `is_static` (1 = reservation), `lease_end` (epoch **seconds**), plus pool metrics `utilization_percent`, `free_percent`, `available_ips`, `active_leases`, `pool_size` |
+      | `unpoller_firewall_rules_*` and `unpoller_firewall_rule_{enabled,index}` | summary is one series; per-rule carries `rule_name`, `source_zone`, `dest_zone`, `protocol`, `action` |
+      | `unpoller_speedtest_*` | ISP down/up/latency; runs roughly hourly, so **never use a short window** for an ISP panel — use ~7d and report the age of the last test |
+      | `unpoller_client_*` | `sw_port`, `sw_name`, `ap_name`, `radio_proto`, `channel`, `mac`, `oui`, `essid`, `wired` |
+      
+      ### Actively misleading — populated, but always zero on this deployment
+      
+      `vap_ccq_ratio`, `vap_dns_latency_average_seconds`, the radio **airtime rx/tx split**,
+      `ast_be_xmit`. A zero from these is **not** a healthy zero — it is no data. `vap_*` is why
+      per-SSID health panels were retired here. `port_satisfaction_ratio` reads 0 on AP uplink
+      ports. If you build on any of these and see all-zero results, stop and check this list
+      before hunting the query.
+      
+      ### WAN, ISP and fleet specifics (validated)
+
+      - 15 `unpoller_wan_*` families exist, 2 series each, and were entirely unqueried before
+        this work: `wan_interface_state`, `wan_uptime_percentage`,
+        `wan_provider_{download,upload}_kbps`, `wan_max_{rx,tx}_bytes_rate`,
+        `wan_peak_{download,upload}_percent`, `wan_failover_priority`, `wan_type`.
+        Internet 1 is `wan_networkgroup="WAN"` / `state="ACTIVE"`; Internet 2 is `WAN2` /
+        `state="BACKUP"` (`failover-only`).
+      - `unpoller_wan_interface_state` is 1 up / 0 not up, and a **standby WAN legitimately
+        reports 0**. The outage condition is therefore `sum(unpoller_wan_interface_state) < 1`
+        (every WAN down), never a per-interface test.
+      - `unpoller_wan_uptime_percentage` returns **-1** for a WAN that has never been active.
+        That is a sentinel, not an outage. Internet 1 reads 99.93%.
+      - Fleet baseline is **16** reporting devices (`count(unpoller_device_uptime_seconds)`)
+        and 17 `unpoller_device_uplink_*` series. Device-offline is best expressed as a drop
+        below that count; update the constant when hardware is added.
+      - A meshed AP can hold **two** `vwiresta` links (AP Family Room 7: `vwiresta12` and
+        `vwiresta13`), so one link reporting 0 does **not** orphan it. Require zero up links
+        per `name`. Four `uplink_type="wireless"` series exist today, all 1.
+      - Observed port err+drop rates peak around **0.35/s** ("Sharp - Los Gatos" Port 1), so a
+        sustained 1/s threshold sits above normal noise.
+
+      ### Type traps
+      
+      - `unpoller_client_dpi_*` are **gauges** (windowed counts). Wrapping them in `rate()`
+        divides a per-window count by the scrape step and reports nonsense. Read them directly.
+      - `unpoller_firewall_rules_total` is typed **counter** but is a configuration count. Read
+        it raw; `rate()` is meaningless.
+      - `device_uplink_tx_rate` (wireless) and `tx_bytes_rate` (wire) are **different units** and
+        are not comparable — observed mesh values ~3–5e6 against a 2500 Mbps wired link reporting
+        ~1.6e3. Treat both as controller-native.
+      
+      ### Joins and classification traps
+      
+      - MAC → name: `unpoller_device_info{mac,name,model,type,ip,serial,version}`. Scope joins to
+        it explicitly — many other families also carry a `name` label and will fan out.
+      - Switch port → client: join on `sw_port` == `port_name`. A port can carry several clients
+        (an AP uplink carries every wireless client behind it), so only name a client when
+        exactly one resolves; otherwise show the count.
+      - `unpoller_device_uplink_*` is keyed by **name + port**, not by MAC, so it does not join
+        cleanly onto topology edges.
+      - **Do not filter APs by `type="uap"`.** Dream-Machine-class APs (model `UDMA69B`) report
+        `type="udm"`. Filtering on `uap` misses 9 of them — this is UniFi's own classification,
+        not a data error.
+      - **Mesh backhaul** is `unpoller_device_uplink_info{uplink_type="wireless"}` (3 links
+        observed: AP Family Room 7 → AP Office 7, AP Garage 7 → AP Laundry South 7,
+        AP Living Room 7 → AP Bedroom 2 7). `unpoller_topology_link_*` WIRELESS edges are **client
+        associations, not device backhaul** — conflating the two is the single biggest source of
+        confusion here.
+      - The unpoller JSON API (`:37288`) **flattens** the controller payload and drops uplink
+        fields entirely. It is not a source of topology, no matter how it is queried.
+      
+      ## 2. Alerting architecture (validated)
+      
+      The rule is **metric-shaped → metrics; event-shaped → results**.
+      
+      - **Metric-shaped conditions** belong on Cribl Search **Monitors** — PromQL over the metrics
+        store, `type` of `threshold | change | anomaly | forecast | logs | outlier`, with
+        `expr`, `firingCondition`, `firingRule`, `notification`, `priority`, `silence`, `team`.
+        - Create/list: `POST|GET /products/lakehouse_engine_metrics/monitors`
+        - State and history: `GET /alert/history`, `/alert/history/{id}`, `/alert/history/stats`
+        - Silences: `GET|POST /alert/silences`
+        - **Two separate alert systems exist; do not conflate them.** `/alert/*` (tag
+          `insights`) and the metrics-native `lakehouse_engine_metrics` stack (tags
+          `monitors`, `configProfiles`, `alertActivity`). Live state for metric monitors is
+          `GET /products/lakehouse_engine_metrics/engines/{engineId}/datasets/{datasetId}/alert_activity/current`
+          ("current per-instance monitor state"), with `/alert_activity` (paginated) and
+          `/alert_activity/stats` (time-bucketed) alongside it.
+        - **Monitor payloads are not discoverable from the spec.** `expr`, `firingCondition`,
+          `firingRule`, `notification`, `metadata`, `priority` and `team` all describe as
+          `oneOf` nulls, and `config-profiles` takes `configIds` pointing at "shared
+          configuration IDs" with no listing endpoint. Do not guess: create **one** monitor
+          in the Search UI, then `GET` it and clone the exact payload for the rest. Guessing
+          costs a human approval per 400.
+        - Caveat: Monitor creation is an **internal** API on a **Preview** feature. Degrade
+          gracefully; if it is unavailable, fall back to a scheduled search evaluating the same
+          PromQL with a notification (`/search/alert.md`) — less metrics-native, still valid.
+      - **Event-shaped output** — an alert occurrence, its evidence, an investigation verdict —
+        goes to `$vt_results` (scheduled search) or the app's KV store.
+      - **Precedent**: the `criblapm` app stores its metric-shaped data in the metrics store
+        (`criblapm_requests_total`, `criblapm_request_latency_ms` — thousands of PromQL reads per
+        30d) and uses `$vt_results` only for row-shaped panel summaries. Follow that split.
+      - Monitors evaluate against a dataset (`datasetId`) that also holds alert history, so the
+        metric dataset and the alert dataset need to be chosen deliberately.
+      - Managed objects get app-prefixed ids (`ubiquiti2__…`) so human-authored objects are never
+        clobbered. Create/update idempotently.
+      
+      ### The alert set — 5, critical only
+      
+      `ubiquiti2__wan_down`, `ubiquiti2__mesh_backhaul_down`, `ubiquiti2__device_offline`,
+      `ubiquiti2__errors_on_uplink`, `ubiquiti2__dhcp_pool_exhausted`.
+      
+      Reasoning to preserve: a home user acts on *"the house is offline"*, *"that AP is gone"*,
+      *"this cable is failing"*, *"we're about to run out of addresses"*. Everything else —
+      CPU/memory blips, retry rates, PoE draw, radio configuration, DPI — is informational and
+      must not page anyone. Do not add an alert without naming the human action it triggers.
+      Thresholds in the monitor configs are starting points; re-validate against live data before
+      tightening or loosening them.
+      
+      ### Auto-investigation wiring
+      
+      - Triggerable GoatTown agent inheriting the read-only `cribl-read` profile plus `report`
+        (a triggerable agent must have `report_findings` and must not hold deploy tools). It
+        investigates but changes nothing.
+      - One `schedules:` entry per alert, cron in **five-field UTC**, created **disabled** until an
+        interactive run validates it. Gate each run to "something fired in the window" with
+        per-alert dedupe — an unconditional 5-minute investigation burns model calls for nothing.
+      - The **agent stays read-only; the app owns the state write** (app-scoped KV, `PUT` with
+        `content-type: text/plain`). Cribl's own alert history cannot be written by the app, so
+        the app keeps a thin mirror keyed by monitor + fingerprint and links the transcript.
+      - Activating a configuration revision is always a **human** action.
+      
+      ## 3. App-side conventions (`ubiquiti2`)
+      
+      - Design system is **locked** (palette, spacing, card/list/table classes). Never invent a CSS
+        class to solve a layout problem; reuse the existing set.
+      - **`lint_app` passing is not CI-green.** Its bundled ESLint profile does not run the repo's
+        `react-hooks/purity` rules. `tsc --noEmit` also does not run. CI (`lint && test && tsc`) is
+        authoritative — keep impure calls (`Date.now()`) inside effects, never in render.
+      - No `node`/`npm` in this workspace: build with `build_app`, check with `lint_app`, and treat
+        the Vitest suite as CI-only. `vite.config.ts` must stay on `defineConfig` from
+        `'vitest/config'` with `test.server.deps.inline: ['@criblio/app-utils']` or Vitest dies on
+        the library's CSS import.
+      - App data access: `runQuery` from `@criblio/app-utils/search`,
+        `queryRange`/`queryInstant` from `@criblio/app-utils/metrics`, charts from
+        `@criblio/app-utils/viz`. Do not hand-roll a search-job client.
+      - Non-destructive refresh: keep existing data visible while re-querying; skeletons only on
+        first load; a thin progress bar during refresh.
+      
+      ## 4. Re-verify if something looks wrong
+      
+      The monitor **notification payload shape** was never inspected (no monitor existed to read).
+      Confirm it against a live create before wiring a target. Also re-check the patched-metric
+      caveat in §0 if `unpoller_device_uplink_info` returns nothing, and re-validate thresholds
+      whenever a controller or firmware upgrade lands.
+
+profiles:
+  - slug: ubiquiti-network-reader
+    displayName: Ubiquiti network reader
+    description: Read-only Search and metrics access to the UniFi telemetry, plus the network playbook.
+    tools: [cribl-read]
+    skills: []
+    requiredSkills: [ubiquiti-network-observability]
+    mcpTools: []
+    net:
+      hosts: []
+      apiPaths: []
+      datasets: []
+
+agents:
+  - slug: ubiquiti-network-investigator
+    displayName: Ubiquiti network investigator
+    description: Investigates a firing network alert and reports whether it needs human action.
+    startModes: [task]
+    workspaceViews: [terminal]
+    instructions: |
+      You investigate one firing alert on this household's UniFi network and answer a
+      single question: does this need the human's attention right now?
+
+      Follow the skill ubiquiti-network-observability. Never propose or perform a change
+      to Cribl Stream, the unpoller host, or the UniFi controller — you are read-only by
+      design.
+
+      The alert prompt tells you its condition. Evaluate that condition first, against the
+      metrics store, over the alert's own window. If it is no longer firing, say so and
+      stop: do not investigate a condition that is already clear. A clear but short-lived
+      blip is a normal finding, not a failure.
+
+      When it is firing, establish in this order: (1) what is true right now, quoting the
+      series and values; (2) the blast radius — which devices, bands or clients are
+      affected; (3) the most likely cause, separating what the data proves from what you
+      infer; (4) a false-positive check against the traps in the skill (the -1 sentinel on
+      wan_uptime_percentage, dual-link mesh APs, client associations mistaken for device
+      backhaul, populated-but-always-zero metrics). Prefer a stated uncertainty over a
+      confident wrong cause.
+
+      Finish with report_findings: a headline that states the finding itself, the evidence
+      with the metric names and values behind it, then the human action it implies — or
+      explicitly, that no action is warranted yet and what to watch. Use disposition
+      "act" only when someone should really do something now; use "watch" for a
+      degradation worth tracking, and "suppress" when the alert is noise.
+    tools: [report]
+    skills: []
+    requiredSkills: [ubiquiti-network-observability]
+    mcpTools: []
+    inherits: [ubiquiti-network-reader]
+    net:
+      hosts: []
+      apiPaths: []
+      datasets: []
+    llm: {}
+    triggerable: true
+    authorizationGrants: []
+
+schedules:
+  - name: check-internet-down
+    cron: "*/2 * * * *"
+    agent: ubiquiti-network-investigator
+    prompt: >
+      Alert ubiquiti2__internet_down. Condition: sum(unpoller_wan_interface_state) < 1
+      (no WAN interface is up at all). Evaluate it now over the last 10 minutes. Note that
+      a standby WAN legitimately reports 0, so only every WAN being down is an outage.
+    input: {}
+    enabled: false
+    misfirePolicy: skip
+
+  - name: check-mesh-backhaul-down
+    cron: "*/5 * * * *"
+    agent: ubiquiti-network-investigator
+    prompt: >
+      Alert ubiquiti2__mesh_backhaul_down. Condition:
+      sum by (name) (unpoller_device_uplink_up{uplink_type="wireless"}) < 1 — a meshed AP
+      has no wireless uplink left. Evaluate over the last 15 minutes, and check whether the
+      series disappeared entirely rather than reporting 0.
+    input: {}
+    enabled: false
+    misfirePolicy: skip
+
+  - name: check-device-offline
+    cron: "*/5 * * * *"
+    agent: ubiquiti-network-investigator
+    prompt: >
+      Alert ubiquiti2__device_offline. Condition: count(unpoller_device_uptime_seconds) < 16
+      — fewer devices are reporting than the known baseline of 16. Evaluate over the last 15
+      minutes and name which device stopped reporting.
+    input: {}
+    enabled: false
+    misfirePolicy: skip
+
+  - name: check-uplink-errors
+    cron: "*/15 * * * *"
+    agent: ubiquiti-network-investigator
+    prompt: >
+      Alert ubiquiti2__uplink_errors. Condition: sum by (name, port_name)
+      (rate(unpoller_device_port_receive_errors_total[10m]) +
+      rate(unpoller_device_port_receive_dropped_total[10m])) > 1 — sustained receive errors
+      or drops on a port. Evaluate over the last 30 minutes and identify the port and the
+      device behind it.
+    input: {}
+    enabled: false
+    misfirePolicy: skip
+
+  - name: check-dhcp-pool-exhausted
+    cron: "*/15 * * * *"
+    agent: ubiquiti-network-investigator
+    prompt: >
+      Alert ubiquiti2__dhcp_pool_exhausted. Condition: min(unpoller_dhcp_free_percent) < 10
+      — a DHCP pool is nearly full. Evaluate over the last 30 minutes and say which network
+      and how fast the pool is filling.
+    input: {}
+    enabled: false
+    misfirePolicy: skip
+
+mcpServers: []
+
+authorizationGrants: []

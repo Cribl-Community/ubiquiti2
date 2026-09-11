@@ -35,7 +35,7 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           set +e
-          npx eslint . --max-warnings 0 > eslint-report.txt 2>&1
+          npx eslint . --max-warnings 0 --format unix > eslint-report.txt 2>&1
           code=$?
           set -e
           cat eslint-report.txt
@@ -49,10 +49,10 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-          # Compact, one violation per line, printed ABSOLUTELY LAST so the
-          # bounded log tail captures the actual warnings (file:line:col
-          # severity message rule-name).
-          tail -n 15 eslint-report.txt || true
+          # One line per violation with --format unix; the last TWO lines =
+          # [violation line, eslint's max-warnings note] — fits the bounded
+          # log tail window no matter how small.
+          tail -n 2 eslint-report.txt || true
           if [ "$code" -ne 0 ]; then exit 1; fi
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Retain exact tested candidate

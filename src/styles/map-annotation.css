@@ -1,4 +1,16 @@
-/* The framework graph emits its hover card as .n at runtime. Keep this global: the card is an overlay sibling. */
+/* The framework graph emits its hover card as .n at runtime. Keep this global: the card is an overlay sibling.
+   NOTE: the wrapper class is framework-owned and HAS changed across library updates (the .n overrides silently
+   stopped matching). The rules below therefore style the app-owned content classes (.cardTitle, .cardActions,
+   .sparkline) UNSCOPED — they win over the framework defaults regardless of what the wrapper is called. */
+.cardTitle{display:flex!important;align-items:flex-start!important;justify-content:space-between!important}
+.cardTitle button{border:0!important;background:none!important;color:#70747b!important;padding:0 0 0 8px!important;font-size:16px!important;line-height:16px!important;cursor:pointer!important}
+.cardActions{display:flex!important;gap:10px!important;align-items:center!important;margin-top:5px!important;white-space:nowrap!important;flex-wrap:nowrap!important}
+.cardActions a{color:#3981bd!important;font-size:13px!important}
+.cardActions button{background:#fff!important;border:1px solid #c7cbd0!important;border-radius:3px!important;color:#70747b!important;padding:2px 6px!important;font-size:11px!important}
+.cardActions button.collapseLink{background:none!important;border:0!important;color:#3981bd!important;padding:0!important;font-size:13px!important;font-family:inherit!important;cursor:pointer!important}
+.sparkline{height:34px!important;margin:3px 0 0!important;background:transparent!important;position:relative!important;overflow:hidden!important}
+.sparkline svg{display:block!important;width:100%!important;height:34px!important}
+.sparkline span{display:none!important}
 .n{font-family:Arial,sans-serif!important;min-width:0!important;width:240px!important;max-width:240px!important;padding:12px 14px!important;border:1px solid #c8cbd1!important;border-radius:4px!important;box-shadow:0 2px 8px #0002!important;background:#fff!important}
 .n .cardTitle{display:flex!important;align-items:flex-start!important;justify-content:space-between!important}.n .cardTitle button{border:0!important;background:none!important;color:#70747b!important;padding:0!important;font-size:16px!important;line-height:16px!important}.n strong{display:block!important;font-size:14px!important;line-height:18px!important;font-weight:600!important;color:#202532!important;margin:0 0 2px!important;white-space:normal!important}
 .n span{display:block!important;color:#8a9098!important;font-size:12px!important;line-height:16px!important;margin:0 0 4px!important}

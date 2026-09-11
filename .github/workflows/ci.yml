@@ -32,6 +32,16 @@ jobs:
       # warning); removed 2026-09-11 after fixing src/main.tsx:12. If lint
       # regresses, `npx eslint . --max-warnings 0 --format json` reproduces it.
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
+      # Temporary: vitest reports the cause ABOVE its summary lines, so a
+      # plain log tail shows only "Tests no tests". Re-run the suite here and
+      # print the first few cause lines LAST so the bounded excerpt sees them.
+      # Removed once tests are green.
+      - name: Test failure diagnostics
+        if: failure()
+        run: |
+          npx vitest run --reporter=verbose > vitest.log 2>&1 || true
+          tail -n 3 vitest.log || true
+          grep -n -E "Failed to load|Cannot find|is not exported|SyntaxError|ReferenceError|TypeError|Error:" vitest.log | head -n 4 || true
       - name: Retain exact tested candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

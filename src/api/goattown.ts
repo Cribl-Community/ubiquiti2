@@ -11,13 +11,10 @@
  * proxy (proxies.yml → kv.goattownEmbedToken); browser code never sees
  * the token and only forwards the x-goattown-user member claim.
  */
-import type { SessionStatus, WireLoopEvent } from '@criblio/agent-protocol';
+import type { WireLoopEvent, SessionStatus } from '@criblio/agent-protocol';
 import { isTerminalStatus } from '@criblio/agent-protocol';
-import {
-  applyLoopEvent,
-  type InvestigatorTranscriptEntry,
-} from '@criblio/app-utils/investigator';
-import type { LoopEvent } from '@criblio/app-utils/agent-loop';
+import type { InvestigatorTranscriptEntry } from '@criblio/app-utils/investigator';
+import { foldWireEvents } from './wire-fold';
 
 export const DEFAULT_AGENT = 'investigator';
 
@@ -561,37 +558,11 @@ export async function setArchived(
  * the framework reducer so server-run transcripts render pixel-identical
  * to client-run ones. Optimistic local echoes (ids prefixed `local-`)
  * are reconciled against the canonical userMessage instead of duplicated.
+ *
+ * Implementation lives in `./wire-fold` (pure, dependency-light, unit-tested);
+ * re-exported here so callers keep a single import site.
  */
-export function foldWireEvents(
-  prev: InvestigatorTranscriptEntry[],
-  ev: WireLoopEvent,
-): InvestigatorTranscriptEntry[] {
-  if (ev.kind === 'userMessage') {
-    const last = prev[prev.length - 1];
-    if (last && last.kind === 'user' && last.id.startsWith('local-') && last.content === ev.content) {
-      return [...prev.slice(0, -1), { ...last, id: `u-${ev.turnId}` }];
-    }
-    if (prev.some((e) => e.kind === 'user' && e.id === `u-${ev.turnId}`)) return prev;
-    return [...prev, { kind: 'user', id: `u-${ev.turnId}`, content: ev.content }];
-  }
-  if (ev.kind === 'error') {
-    return [
-      ...prev,
-      {
-        kind: 'error',
-        id: `err-${prev.length}-${ev.message.length}-${ev.message.slice(0, 24)}`,
-        message: ev.message,
-      },
-    ];
-  }
-  if (ev.kind === 'done') {
-    return applyLoopEvent(prev, {
-      kind: 'done',
-      reason: ev.reason === 'aborted' ? 'aborted' : 'complete',
-    });
-  }
-  return applyLoopEvent(prev, ev as LoopEvent);
-}
+export { foldWireEvents };
 
 /** Replay a whole session from the older-events endpoint (bounded). */
 export async function loadTranscript(

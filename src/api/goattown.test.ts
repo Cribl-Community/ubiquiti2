@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { foldWireEvents } from './goattown';
+import { foldWireEvents } from './wire-fold';
 import type { InvestigatorTranscriptEntry } from '@criblio/app-utils/investigator';
 import type { WireLoopEvent } from '@criblio/agent-protocol';
 

@@ -1,4 +1,7 @@
-import { defineConfig, type IndexHtmlTransformContext, type IndexHtmlTransformResult, type ViteDevServer } from 'vite'
+import type { IndexHtmlTransformContext, IndexHtmlTransformResult, ViteDevServer } from 'vite'
+// defineConfig comes from vitest/config so the `test` block below is typed;
+// tsconfig.node.json typechecks this file during `npm run build`.
+import { defineConfig } from 'vitest/config'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { join } from 'path'
@@ -78,5 +81,14 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-  }
+  },
+  test: {
+    // @criblio/app-utils ships component CSS alongside its JS (e.g.
+    // investigator/InvestigatorChat.css). Vitest externalises node_modules by
+    // default, so NODE's ESM loader — not Vite — tries to import that .css and
+    // fails the whole suite with ERR_UNKNOWN_FILE_EXTENSION ("Tests: no
+    // tests"). Inlining the package makes Vite process it, and CSS imports are
+    // no-ops under Vitest's default css:false.
+    server: { deps: { inline: ['@criblio/app-utils'] } },
+  },
 })

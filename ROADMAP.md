@@ -99,6 +99,27 @@ controller-API read (see §7.3).
 **Read-through:** we are not short of data; we are short of *interpretation*. The catalog says
 we use roughly a third of what we scrape.
 
+### 2.1 Validation pass — which of these families actually carry data **[V, measured 2026-09-11]**
+
+Series counts say a metric *exists*; only a live query says it *means* something. Every panel
+below was validated before it was written, and four metrics were retired rather than built:
+
+| Metric | Status | Verdict |
+|---|---|---|
+| `unpoller_device_radio_transmit_retries` + `_transmit_packets` | **real** | Retry *ratio* is computable. Measured: 2.4 GHz ≈ **20%**, 5 GHz ≈ 1%, 6 GHz ≈ 0.2% — the best RF signal we have |
+| `unpoller_device_radio_channel`, `_ht`, `_nss`, `_transmit_power` | **real** | Channel is the metric's **value**, not a label; per-band values are sane (21.9 / 22.2 / 11 dBm) |
+| `unpoller_speedtest_{download,upload}_mbps`, `_latency_ms`, `_timestamp_seconds` | **real** | Labelled by `wan_group` / `wan_interface`. Two WANs exist here: WAN/eth8 (943↓ / 119↑ / 16 ms) and WAN2/eth9 (**all zeros — idle link**). Aggregate with `max()` or the idle WAN draws a false outage line |
+| `unpoller_site_{adopted,disconnected,pending,disabled}` | **real** | Per `subsystem`: lan **15**, wlan **10**, wan **1** adopted; 0 disconnected everywhere |
+| `unpoller_client_dpi_transmit_bytes` | **real** | 130 distinct applications on the upload side (Zoom, Netflix, Hulu, Roku…) — nothing has ever queried it |
+| `unpoller_device_vap_ccq_ratio` | **populated but always 0** | Retired — Linux-based APs don't report CCQ |
+| `unpoller_device_vap_dns_latency_average_seconds` | **populated but always 0** | Retired — would render a fake "0 ms, perfect DNS" |
+| `unpoller_device_radio_channel_utilization_{receive,transmit}_ratio` | **≈0 on every radio** | Retired — the split is not populated; only the `total` ratio is meaningful (it's what we already chart) |
+| `unpoller_device_radio_ast_be_xmit` | **populated but always 0** | Retired — no beacon-airtime signal available |
+| `unpoller_device_port_satisfaction_ratio` | **misleading** | 1 on healthy switch ports but **0 on AP uplink ports** — never use it alone to call a port bad |
+
+Lesson kept in the KPI list: *a zero from a metric that never reports is not a healthy zero.*
+Four of these would have shipped as confident "0%" or "0 ms" panels without this pass.
+
 ---
 
 ## 3. How we compare
@@ -266,21 +287,30 @@ Each phase is independently shippable and measurable. Effort: S ≤ 1 day, M ≤
 L > 3 days (single maintainer).
 
 ### Phase 0 — Surface what we already scrape (S–M each)
-*Goal: exercise the ~2/3 of collected telemetry we ignore.*
-1. **ISP truth panel**: `unpoller_speedtest_{download,upload}_mbps` + `latency_ms` history on
-   `/gateway`, with "last test" freshness. Accept: shows ≥7 days of tests or an explicit
-   empty state.
-2. **Per-client app visibility**: upload side of DPI + packet rates; add app/category
-   breakdown to `/clients/:clientName`. Accept: per-client top apps, receive *and* transmit.
-3. **RF detail on AP detail**: airtime split (`channel_utilization_receive/transmit_ratio`),
-   `transmit_retries`, `ast_be_xmit`, channel/width/NSS/TX-power audit row.
-4. **Per-SSID health**: `vap_ccq_ratio`, `vap_dns_latency_average_seconds`,
-   `vap_mac_filter_rejects`, `vap_average_client_signal`.
-5. **Wired/fabric hygiene**: transmit-side port errors/drops, `port_satisfaction_ratio`,
-   broadcast/multicast rates (storm detector), `port_speed_bps` mismatch audit.
-6. **Inventory drift**: `site_{adopted,disconnected,pending,disabled}` on Overview ("3 devices
-   offline > 10 min") — the cheapest real alert.
-7. **DHCP + firewall inventory**: `dhcp_{is_static,lease_end}`, `firewall_rule_{enabled,index}`.
+*Goal: exercise the ~2/3 of collected telemetry we ignore. Status: partly delivered.*
+
+| # | Item | Status |
+|---|---|---|
+| 1 | **ISP truth panel** — speed-test down/up/latency + "last test" age on `/gateway`, fixed 7-day window | **Done** |
+| 2 | **Per-client app visibility** — upload-side DPI list on `/clients/:clientName` | **Done** (upload DPI); packet rates still open |
+| 3 | **RF detail on AP detail** — transmit retry *rate* by band + KPI. Airtime split / retries / beacons: see §2.1, mostly unusable | **Partly** (retry rate done; per-band channel/width/NSS/TX-power audit row still open) |
+| 4 | **Per-SSID health** — `vap_*` metrics | **Retired**: all `vap_*` values are 0 here (§2.1) |
+| 5 | **Wired/fabric hygiene** — transmit-side port errors/drops, broadcast/multicast rates, port-speed mismatch | Open (do **not** use `port_satisfaction_ratio` alone) |
+| 6 | **Inventory drift** — adopted / offline / pending tiles on Overview | **Done** |
+| 7 | **DHCP + firewall inventory** — `dhcp_{is_static,lease_end}`, `firewall_rule_{enabled,index}` | Open |
+
+1. ~~**ISP truth panel**~~ — delivered; see the validation table for the second-WAN caveat.
+2. **Per-client app visibility** — upload side done; add DPI packet rates for "who is saturating
+   the link" rather than "who transferred most bytes". Accept: per-client top apps, receive *and* transmit.
+3. **RF detail on AP detail** — retry rate done. Remaining: a per-band audit row (channel, width,
+   NSS, TX power) — these must be rendered per band, since `max()` across bands is meaningless for a
+   channel number. Accept: values shown per band with the band they belong to.
+4. **Per-SSID health** — **retired** (§2.1): `vap_ccq_ratio` and `vap_dns_latency_average_seconds`
+   are 0 on every VAP in this deployment. Revisit only if a controller/firmware change populates them.
+5. **Wired/fabric hygiene** — transmit-side port errors/drops, `port_satisfaction_ratio` (with the
+   AP-port caveat), broadcast/multicast rates (storm detector), `port_speed_bps` mismatch audit.
+6. ~~**Inventory drift**~~ — delivered as three Overview tiles.
+7. **DHCP + firewall inventory** — `dhcp_{is_static,lease_end}`, `firewall_rule_{enabled,index}`.
 
 ### Phase 1 — Health score with attribution (M)
 *Goal: the one-line verdict.*

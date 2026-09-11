@@ -24,7 +24,7 @@ jobs:
       # not a framework source dependency. The action generates/refreshes
       # package-lock.json in CI before `npm ci`; this app carries no
       # lockfile of its own.
-      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@06be80097a6771dfc5adf6fefc1a2dd21e0b4803
       - name: Upgrade validation workspace with exact candidate
         env:
           CRIBL_BASE_URL: ${{ secrets.CRIBL_RELEASE_VALIDATION_BASE_URL }}

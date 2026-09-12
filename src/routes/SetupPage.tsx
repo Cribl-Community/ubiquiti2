@@ -118,24 +118,27 @@ export default function SetupPage() {
   // What is actually stored, so the table shows reality rather than intent.
   const storedById = new Map(inventory.monitors.map((m) => [m.id, storedPromql(m) ?? '(none)']));
 
-  const apply = useCallback(async () => {
+  // Deliberately NOT memoized: this runs only from a click, and the React
+  // Compiler rule (react-hooks/preserve-manual-memoization) cannot preserve a
+  // useCallback whose dependency is a freshly computed array plus an object
+  // mutated across awaits. Local checks don't run that rule; CI does.
+  const apply = async () => {
     setApplying(true);
     setError(null);
-    const next: Record<string, string> = {};
+    const done: Record<string, string> = {};
     // Sequential and independent: one failure never aborts the rest.
-    for (const row of rows) {
-      if (row.kind === 'noop') continue;
+    for (const row of pending) {
       try {
-        next[row.spec.id] = await applyRow(row);
+        done[row.spec.id] = await applyRow(row);
       } catch (e) {
-        next[row.spec.id] = `failed — ${e instanceof Error ? e.message : String(e)}`;
+        done[row.spec.id] = `failed — ${e instanceof Error ? e.message : String(e)}`;
       }
-      setResults({ ...next });
+      setResults({ ...done });
     }
     setApplying(false);
     // Re-read so the table shows what was actually stored, not what we sent.
     await reload();
-  }, [rows, reload]);
+  };
 
   if (loading) {
     return (

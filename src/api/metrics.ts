@@ -94,11 +94,26 @@ export async function queryMetric(query: string, step?: number, earliest = '-1h'
   }
 }
 
-export async function latestMetric(query: string, fallback: number): Promise<number> {
+/**
+ * Latest value of a single-series metric.
+ *
+ * With a fallback, callers get a number (the app's convention is a plausible
+ * healthy value, so a stale metric store doesn't render as 0 APs / 0 devices).
+ * Without one, callers get `null` — for screens that already render "—" for
+ * unknown and must not invent a reading. The overloading keeps those two
+ * contracts apart so neither caller has to cast.
+ */
+export async function latestMetric(query: string, fallback: number): Promise<number>;
+export async function latestMetric(query: string): Promise<number | null>;
+export async function latestMetric(query: string, fallback?: number): Promise<number | null> {
   try {
     const points = await queryMetric(query);
-    return points.at(-1)?.value ?? fallback;
-  } catch { return fallback; }
+    const value = points.at(-1)?.value;
+    if (value !== undefined) return value;
+  } catch {
+    // fall through — no data is no data
+  }
+  return fallback ?? null;
 }
 
 /**
@@ -164,7 +179,10 @@ export async function queryMeshEdges(): Promise<MeshEdge[]> {
   return edges.flatMap((p) => {
     const childName = p.labels?.name;
     const parentName = p.labels?.uplink_device;
-    const parentMac = p.labels?.uplink_mac;
+    // MapPage resolves the parent by device name first and MAC second, so an
+    // absent uplink_mac simply never matches by MAC. '' keeps MeshEdge's
+    // parentMac a string without dropping the link off the map.
+    const parentMac = p.labels?.uplink_mac ?? '';
     if (!childName || !parentName) return [];
     return [{
       childName,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import EmptyTableRows from '../components/EmptyTableRows';
-import { latestMetric, queryMetric, apScoped } from '../api/metrics';
+import { latestMetric, queryMetric, apScoped, type MetricPoint } from '../api/metrics';
 import BarList, { type BarListItem } from '../components/viz/BarList';
 import LineChart, { type LineSeries } from '../components/viz/LineChart';
 import type { ReactNode } from 'react';

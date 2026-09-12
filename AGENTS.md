@@ -19,6 +19,54 @@ Rebuild of a Ubiquiti/UniFi network overview dashboard backed by UnPoller metric
 - Keep Search endpoints in the `default_search` group. KV writes must use `text/plain`.
 - **unpoller site gauges split by `subsystem` × `status` (validated):** `unpoller_site_users/_guests/_iots/_receive_rate_bytes/_transmit_rate_bytes` carry `subsystem` (lan/wlan/wan/www/vpn) and `status` labels. During controller API hiccups, brief `status="error"`/`"warning"` rows appear that DUPLICATE the `ok` counts (observed: 80 → 162 client-count spikes for 1–2 samples) — unfiltered `sum()` double-counts them. Always scope site-gauge sums to `{status="ok"}` (OverviewPage does), and scope throughput to `subsystem=~"wan|lan"` — `wan` mirrors `www` exactly (exclude it), and `lan` already contains the Wi-Fi clients' traffic (don't add `wlan` on top). Chart spikes that exit the plot frame are also fixed: LineChart clips series to the plot box.
 
+## Setup workflow (`/setup`)
+
+`src/routes/SetupPage.tsx` inventories this workspace and upserts the network alerts. It is
+the supported way to provision them — do not hand-create monitors in the UI.
+
+- **Specs are data.** `src/api/alertSpecs.ts` holds the five alerts: managed id, name,
+  PromQL, operator/limit, evaluation window, priority, and the trap that makes each one
+  correct. Adding an alert means adding a spec; the page picks it up. All five are P1 by
+  design (see ROADMAP.md for why the set stays small).
+- **Transport.** `src/api/monitors.ts` calls
+  `/products/lakehouse_engine_metrics/monitors` — unlike anything under `/search/*`, it takes
+  no group prefix — through the framework's `createBrowserHttpClient()` from
+  `@criblio/app-utils/provisioner`. A 403/404 becomes `unsupported` and the page degrades to
+  read-only guidance rather than half-applying.
+- **Inventory is read-only and runs on load:** monitor list, metrics freshness (device
+  count plus the age of the newest sample), notification targets, log dataset. The GoatTown
+  agent/profile/skill are reported as *declared*, never *verified* — `GET
+  /ai/sessions/{slug}` answers "Invalid agent slug" even for a known-good agent, so it is
+  not an existence test and the page does not pretend otherwise.
+- **Reconcile, then apply on click.** Rows use the framework provisioner's vocabulary —
+  `create` / `update` / `noop` — shown as `not created`, `needs update`, `up to date`, with
+  the differences spelled out. Writes are sequential and independent (one failure does not
+  abort the rest) and never destructive: monitors are created with an `ubiquiti2__` id, and
+  `applyRow` refuses to create anything that does not carry that prefix, because the prefix
+  is what bounds this app's blast radius. A monitor a human made is **adopted by exact name**
+  and updated in place instead of duplicated.
+- **The algorithm is mirrored, not imported.** APM's `src/api/provisioner.ts` is 42 lines
+  because the reconciliation itself lives in `@criblio/app-utils/provisioner`. That
+  `reconcile()` is bound to saved searches (`ProvisionedSearch`,
+  `/m/default_search/search/saved`) and cannot provision monitors, so `monitors.ts` mirrors
+  its shape — including the `isSameAsPlan`/`deepSubset` lesson that comparison must be
+  "what we set is present", never exact equality, or every reconcile re-patches forever.
+- **One deliberate divergence from APM:** its reconcile deletes `<prefix>*` saved searches
+  absent from its plan. Here an app-created monitor absent from the specs is listed as an
+  orphan and never removed automatically — silently deleting a live alert is not an
+  acceptable side effect of pressing "re-check". Foreign monitors (neither our id nor a known
+  name) are likewise listed and left untouched.
+- **Verify by re-reading.** After applying, the page reloads and shows the stored `promql`
+  for each monitor. That read-back is the point: the mesh alert carries its
+  `uplink_type="wireless"` filter inside `promql` with `builder.labelFilters` empty (the
+  entry shape is still unknown), so the stored expression is what proves the filter survived.
+- **The payload shape is observed, not documented.** `expr`, `firingCondition`,
+  `firingRule`, `notification` and `priority` are `oneOf` nulls in the API spec. The shape in
+  `monitorPayload()` was read back off a monitor created by hand in the Search UI. Updates
+  PATCH the full desired document minus `id`, so they are correct whether PATCH turns out to
+  be partial or a full replacement.
+- `METRICS_DATASET` is `'metrics'` in this workspace; not every workspace names it that.
+
 ## Design system
 The overview uses a light gray canvas (`#f7f8fa`), white bordered cards, compact Open Sans typography, blue `#347fce` primary series, green `#238b3c` secondary series, and pink `#d65b8d` IoT series. Preserve the two-column panel grid, eight-card KPI row, and compact inventory table unless the reference screen changes.
 

@@ -13,6 +13,7 @@ import InvestigatePage from './routes/InvestigatePage';
 import ClientsPage from './routes/ClientsPage';
 import ClientDetailPage from './routes/ClientDetailPage';
 import MapPage from './routes/MapPage';
+import SetupPage from './routes/SetupPage';
 
 export default function App() {
   return (
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="/map" element={<MapPage />} />
           <Route path="/events" element={<EventsPage />} />
           <Route path="/investigate" element={<InvestigatePage />} />
+          <Route path="/setup" element={<SetupPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>

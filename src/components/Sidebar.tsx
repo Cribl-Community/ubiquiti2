@@ -29,6 +29,7 @@ const items: NavItem[] = [
   { label: 'Map', to: '/map', icon: <svg {...ICON_PROPS}><circle cx="12" cy="5" r="2" /><circle cx="5" cy="18" r="2" /><circle cx="19" cy="18" r="2" /><path d="m11 7-5 9m7-9 5 9M7 18h10" /></svg> },
   { label: 'Events', to: '/events', icon: <svg {...ICON_PROPS}><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="2" cy="6" r=".5" fill="currentColor" /><circle cx="2" cy="12" r=".5" fill="currentColor" /><circle cx="2" cy="18" r=".5" fill="currentColor" /></svg> },
   { label: 'Investigate', to: '/investigate', icon: <svg {...ICON_PROPS}><circle cx="10" cy="10" r="6" /><path d="m15 15 5 5M10 7v6M7 10h6" /></svg> },
+  { label: 'Setup', to: '/setup', icon: <svg {...ICON_PROPS}><polyline points="9 11.5 12 14.5 21 5" /><path d="M21 12.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg> },
 ];
 
 const settingsItem: NavItem = {

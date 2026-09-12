@@ -11,6 +11,12 @@ type Node = ForceNode & { kind:'gateway'|'switch'|'ap'|'client'; mac?:string; na
 type Edge = ForceLink<Node> & { kind:'wired'|'wireless'; rate:number };
 type WirelessGroup={apId:string;apName:string;clients:{mac:string;name:string}[]};
 
+/* Node radius in px. NetworkGraph takes nodeRadius() from the app, and the
+   framework's ForceNode also requires a `size` (it feeds forceCollide). One
+   formula supplies both, so the value a node collides at is the value it
+   draws at — no second constant to drift out of sync. */
+const nodeRadiusOf=(kind:string,clients?:number)=>kind==='gateway'?22:kind==='switch'?19:kind==='ap'?16:clients?Math.min(20,11+clients/3.2):8;
+
 const palette={gateway:'#347fce',switch:'#168454',ap:'#76509a',client:'#e7ebf1'};
 
 /* Rate formatting mirrors the original: one decimal under ~100 KB/s or for MB/s,
@@ -109,7 +115,7 @@ export default function MapPage(){
            UDMA69B) as type="udm" — they are APs, not gateways. Only UDM*
            models (UDMPROSE etc.) render as the gateway. */
         const kind=t==='udm'?(/^UDMA/.test(l.model??'')?'ap':'gateway'):t==='uap'?'ap':'switch';
-        byMac.set(mac,{id:mac,kind,mac,name:l.name??mac,rate:0});
+        byMac.set(mac,{id:mac,kind,mac,name:l.name??mac,rate:0,size:nodeRadiusOf(kind)});
       });
       const byName=[...byMac.values()];
 
@@ -149,7 +155,7 @@ export default function MapPage(){
                so its wireless clients still render. */
             ap=byName.find(x=>x.name===apName);
             if(ap){ap.kind='ap';}
-            else{ap={id:apName,kind:'ap',mac:'',name:apName,rate:0};byName.push(ap);byMac.set(apName,ap);}
+            else{ap={id:apName,kind:'ap',mac:'',name:apName,rate:0,size:nodeRadiusOf('ap')};byName.push(ap);byMac.set(apName,ap);}
           }
           const g=groups.get(ap.id)??{apId:ap.id,apName,clients:[]};
           g.clients.push({mac,name:l.name??mac});
@@ -213,14 +219,14 @@ export default function MapPage(){
       if(isSingle||expanded.has(g.apId)){
         g.clients.forEach(c=>{
           const id=`client:${c.mac}:${g.apId}`;
-          nodes.push({id,kind:'client',mac:c.mac,name:c.name,apName:g.apName,rate:clientRates.get(c.mac)??clientRates.get(c.name)??0});
+          nodes.push({id,kind:'client',mac:c.mac,name:c.name,apName:g.apName,rate:clientRates.get(c.mac)??clientRates.get(c.name)??0,size:nodeRadiusOf('client')});
           links.push({source:g.apId,target:id,rate:clientRates.get(c.mac)??clientRates.get(c.name)??0,kind:'wireless'} as Edge);
         });
         if(isSingle)continue;
         /* collapsed clusters stay visible for multi-client APs only */
       }else{
         const id=`clients:${g.apId}`;
-        nodes.push({id,kind:'client',name:`${g.clients.length} clients`,clients:g.clients.length,apName:g.apName,rate:total});
+        nodes.push({id,kind:'client',name:`${g.clients.length} clients`,clients:g.clients.length,apName:g.apName,rate:total,size:nodeRadiusOf('client',g.clients.length)});
         links.push({source:g.apId,target:id,rate:total,kind:'wireless'} as Edge);
       }
     }
@@ -232,12 +238,12 @@ export default function MapPage(){
       const key=`wclients:${g.parentId}`;
       const leaf=(c:{mac:string;name:string})=>{
         const id=`wclient:${c.mac}`;
-        nodes.push({id,kind:'client',mac:c.mac,name:c.name,rate:clientRates.get(c.mac)??clientRates.get(c.name)??0});
+        nodes.push({id,kind:'client',mac:c.mac,name:c.name,rate:clientRates.get(c.mac)??clientRates.get(c.name)??0,size:nodeRadiusOf('client')});
         links.push({source:g.parentId,target:id,rate:clientRates.get(c.mac)??clientRates.get(c.name)??0,kind:'wired'} as Edge);
       };
       if(g.clients.length===1||expanded.has(key))g.clients.forEach(leaf);
       else{
-        nodes.push({id:key,kind:'client',name:`${g.clients.length} clients`,clients:g.clients.length,rate:total});
+        nodes.push({id:key,kind:'client',name:`${g.clients.length} clients`,clients:g.clients.length,rate:total,size:nodeRadiusOf('client',g.clients.length)});
         links.push({source:g.parentId,target:key,rate:total,kind:'wired'} as Edge);
       }
     });
@@ -270,7 +276,7 @@ export default function MapPage(){
         links={graph.links}
         width={size.width}
         height={size.height}
-        nodeRadius={n=>n.kind==='gateway'?22:n.kind==='switch'?19:n.kind==='ap'?16:n.clients?Math.min(20,11+n.clients/3.2):8}
+        nodeRadius={n=>nodeRadiusOf(n.kind,n.clients)}
         nodeFill={n=>palette[n.kind]}
         nodeStroke={n=>n.kind==='client'?'#c9d2de':palette[n.kind]}
         renderNodeContent={n=>n.kind==='client'&&n.clients

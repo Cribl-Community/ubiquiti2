@@ -46,7 +46,7 @@ const COUNT_QUERY=`dataset="main" | where _raw contains "CEF:0|Ubiquiti" `
 
 const when=(t:number)=>{const d=new Date(t*1000);return `${d.toLocaleString('en-US',{month:'short',day:'numeric'})}, ${d.toLocaleString('en-US',{hour:'2-digit',minute:'2-digit'})}`};
 const classify=(n:string)=>n.includes('Connected')?'connects':n.includes('Roamed')?'roams':n.toLowerCase().includes('disconnect')?'disconnects':'other';
-const band=b=>b==='na'?'5 GHz':b==='ng'?'2.4 GHz':b==='ax'?'6 GHz':`${b} band`;
+const band=(b:string)=>b==='na'?'5 GHz':b==='ng'?'2.4 GHz':b==='ax'?'6 GHz':`${b} band`;
 const detailOf=(r:Record<string,unknown>):string=>{
   const ap=String(r.ap??'');const prev=String(r.prev_ap??'');
   if(prev&&ap&&prev!==ap)return `${prev} → ${ap} (${r.prev_rssi?`${r.prev_rssi} dBm`:'—'} → ${r.rssi?`${r.rssi} dBm`:'—'})`;

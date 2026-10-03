@@ -17,11 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Registry mode: no `framework-sha`, so the action skips the
-      # pinned-clone step. The action generates/refreshes
-      # package-lock.json in CI before `npm ci`, so `@criblio` (and
-      # everything else) is resolved against a lockfile that is never
-      # committed here — this app carries no lockfile by design, and
-      # nothing in the app creates one.
+      # pinned-clone step. package-lock.json IS committed, so `npm ci`
+      # installs exactly the reviewed tree: a dependency change is visible
+      # in review, and a new transitive release cannot move the build or
+      # the audit result on its own. Refresh it deliberately with
+      # `npm install --package-lock-only` whenever package.json changes.
       #
       # The ref below is still a SHA — that pins the ACTION, which is
       # supply-chain hygiene every other step here follows (and which
@@ -32,6 +32,12 @@ jobs:
       # warning); removed 2026-09-11 after fixing src/main.tsx:12. If lint
       # regresses, `npx eslint . --max-warnings 0 --format json` reproduces it.
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
+      # Proof that CI installed the COMMITTED lockfile: `npm ci` never
+      # writes package-lock.json, so any diff here means the action
+      # re-resolved the tree itself and our pin was not what it built.
+      - name: Lockfile drift report
+        if: always()
+        run: git --no-pager diff --stat -- package-lock.json || true
       # Temporary: vitest reports the cause ABOVE its summary lines, so a
       # plain log tail shows only "Tests no tests". Re-run the suite here and
       # print the first few cause lines LAST so the bounded excerpt sees them.

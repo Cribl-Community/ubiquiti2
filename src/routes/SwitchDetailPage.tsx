@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { latestMetric, queryMetric, type MetricPoint } from '../api/metrics';
-import LineChart, { type LineSeries } from '../components/viz/LineChart';
+import { LineChart, type LineSeries } from '@criblio/app-utils/viz';
 import { investigatePrompt } from '../api/investigator';
 import { useTimeRange } from '../components/TimeRange';
 import s from './SwitchDetailPage.module.css';

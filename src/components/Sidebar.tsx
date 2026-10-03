@@ -29,11 +29,10 @@ const items: NavItem[] = [
   { label: 'Map', to: '/map', icon: <svg {...ICON_PROPS}><circle cx="12" cy="5" r="2" /><circle cx="5" cy="18" r="2" /><circle cx="19" cy="18" r="2" /><path d="m11 7-5 9m7-9 5 9M7 18h10" /></svg> },
   { label: 'Events', to: '/events', icon: <svg {...ICON_PROPS}><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="2" cy="6" r=".5" fill="currentColor" /><circle cx="2" cy="12" r=".5" fill="currentColor" /><circle cx="2" cy="18" r=".5" fill="currentColor" /></svg> },
   { label: 'Investigate', to: '/investigate', icon: <svg {...ICON_PROPS}><circle cx="10" cy="10" r="6" /><path d="m15 15 5 5M10 7v6M7 10h6" /></svg> },
-  { label: 'Setup', to: '/setup', icon: <svg {...ICON_PROPS}><polyline points="9 11.5 12 14.5 21 5" /><path d="M21 12.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg> },
 ];
 
 const settingsItem: NavItem = {
-  label: 'Configuration', to: '/settings',
+  label: 'Configuration', to: '/configuration',
   icon: <svg {...ICON_PROPS}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>,
 };
 

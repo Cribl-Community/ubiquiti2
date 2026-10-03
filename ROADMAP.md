@@ -30,7 +30,7 @@ claims more than those two levels.
 | `/map` | Force-directed topology: gateway → switch → AP → client clusters; wired vs wireless edges; edge width = traffic; **mesh backhaul edges**; pin card with traffic, client count, CPU/mem, sparkline, drill-through links, "Investigate" |
 | `/events` | CEF controller log: connects, roams, disconnects, other controller events, device problems |
 | `/investigate` | GoatTown agent: natural-language investigation with live metric tools and per-entity prompt builders |
-| `/settings` | Mesh-link overrides (manual topology corrections), GoatTown connection |
+| `/configuration` | Two tabs: **Settings** (dataset, GoatTown connection) and **Alerts setup** (workspace inventory + alert provisioning) |
 
 ### 1.2 Data plane [V]
 

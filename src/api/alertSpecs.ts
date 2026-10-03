@@ -1,6 +1,7 @@
 /**
- * The network alerts, as data — the single source of truth for the Setup
- * workflow and for anything that wants to describe an alert.
+ * The network alerts, as data — the single source of truth for the
+ * Configuration → Alerts setup tab and for anything that wants to describe
+ * an alert.
  *
  * Why this file exists: the monitor payload shape is NOT discoverable from
  * the Cribl API spec. `expr`, `firingCondition`, `firingRule`, `notification`
@@ -9,8 +10,9 @@
  * observed rather than designed — `sum(sum(x))` in `query.A.promql` was the
  * UI composing its own aggregation, which is the tell.
  *
- * Adding an alert: add a spec here. Nothing else needs to change; the Setup
- * page inventories, creates and updates from this list.
+ * Adding an alert: add a spec here. Nothing else needs to change; the
+ * Configuration → Alerts setup tab inventories, creates and updates from this
+ * list.
  */
 
 /** Dataset holding the unpoller_* series. Not every workspace calls it this. */

@@ -1,105 +1,74 @@
 /**
- * GoatTown server-side investigator transport — the one module that
- * talks to GoatTown. The agent loop runs server-side on durable
- * sessions; this module owns connection metadata, the wire operations,
- * bounded polling, and the wire→transcript folding that feeds the
- * framework's InvestigatorTranscript. No UI lives here.
+ * GoatTown connection and per-member state.
  *
- * Wire protocol: @criblio/agent-protocol (v1). Operations per the
- * embed-agent recipe: /investigations create/list, per-session
- * status/events/messages and lifecycle. Auth is injected by the fetch
- * proxy (proxies.yml → kv.goattownEmbedToken); browser code never sees
- * the token and only forwards the x-goattown-user member claim.
+ * The session TRANSPORT is the framework's: this module used to carry a
+ * hand-written client, poller, wire mapper and KV layer, all of which now
+ * live in `@criblio/app-utils/goattown` (`GoatTownClient`, `observeSession`,
+ * `runRequest`, `sendAndRun`, `SessionDiagnostics`) and
+ * `@criblio/app-utils/kv`. What remains here is only what is specific to
+ * this app:
+ *
+ *   - the saved connection record (`goattown/connection`) and the write-only
+ *     credential key that `config/proxies.yml` injects from;
+ *   - the per-member session pointer and composer draft;
+ *   - the connection diagnostics the Investigate and Configuration pages
+ *     show.
+ *
+ * Import the framework by SUBPATH, never from the package root: the root
+ * re-exports Node-only modules (`dotenv` → `node:fs/promises`) and the
+ * browser build dies on the resolution, which tsc does not catch.
  */
-import type { WireLoopEvent, SessionStatus } from '@criblio/agent-protocol';
-import { isTerminalStatus } from '@criblio/agent-protocol';
-import type { InvestigatorTranscriptEntry } from '@criblio/app-utils/investigator';
-import { foldWireEvents } from './wire-fold';
+import {
+  GoatTownClient,
+  SessionDiagnostics,
+  type ProtocolResponse,
+} from '@criblio/app-utils/goattown';
+import {
+  KvError,
+  kvGetJson,
+  kvPutJson,
+  kvPutText,
+  memberKey,
+} from '@criblio/app-utils/kv';
 
 export const DEFAULT_AGENT = 'investigator';
 
+/** Public connection record. Read by the pages; written by the setup flow. */
 const CONNECTION_KEY = 'goattown/connection';
-const sessionsKey = (memberId: string) => `goattown/sessions/${memberId}`;
-const REQUEST_TIMEOUT_MS = 25_000; // host proxy cuts off at 30s
-const RUNNING_POLL_MS = 4_000;
-const IDLE_POLL_MS = 15_000;
-const MAX_BACKOFF_MS = 30_000;
-const MAX_BACKFILL_PAGES = 10;
+/** Credential key. Named here because `config/proxies.yml` reads it. */
+const TOKEN_KEY = 'goattownEmbedToken';
 
 const apiUrl = () => window.CRIBL_API_URL ?? '/api/v1';
 
-// ─────────────────────────────────────────────────────────────────
-// App KV (text/plain — a JSON content-type round-trips [object Object])
-// ─────────────────────────────────────────────────────────────────
-
-async function kvGet(key: string): Promise<string | null> {
-  const resp = await fetch(`${apiUrl()}/kvstore/${key}`);
-  if (resp.status === 404) return null;
-  if (!resp.ok) throw new Error(`KV read failed (${resp.status})`);
-  return resp.text();
-}
-
-async function kvPut(key: string, value: string): Promise<void> {
-  const put = (k: string) =>
-    fetch(`${apiUrl()}/kvstore/${k}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'text/plain' },
-      body: value,
-    });
-  const resp = await put(key);
-  if (resp.ok) return;
-  if (resp.status === 404) {
-    // Cribl KV requires intermediate path segments to exist (PUT
-    // goattown/sessions/{id} 404s unless goattown/sessions does). A
-    // reinstall can clear them — recreate the missing parents, then retry.
-    const parts = key.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      const parent = parts.slice(0, i).join('/');
-      const r = await fetch(`${apiUrl()}/kvstore/${parent}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'text/plain' },
-        body: '',
-      });
-      if (!r.ok && r.status !== 404) throw new Error(`KV write failed (${r.status})`);
+/**
+ * Write app KV, recreating missing parent segments.
+ *
+ * Cribl's KV store requires the intermediate path segments of a key to exist
+ * (a PUT to `goattown/session/<memberId>` 404s until `goattown` does); the framework's
+ * writer reports that honestly as a `KvError` instead of hiding it, and this
+ * wrapper adds the parents and retries once. The final write is never
+ * swallowed — a failure there is the caller's to see.
+ */
+async function writeKv(write: () => Promise<void>, key: string): Promise<void> {
+  try {
+    await write();
+    return;
+  } catch (error) {
+    if (!(error instanceof KvError) || error.status !== 404) throw error;
+  }
+  const parts = key.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    try {
+      await kvPutText(parts.slice(0, i).join('/'), '');
+    } catch {
+      /* A parent that already exists, or cannot be created, is reported by
+         the retry below rather than here. */
     }
-    const retry = await put(key);
-    if (retry.ok) return;
-    throw new Error(`KV write failed (${retry.status})`);
   }
-  throw new Error(`KV write failed (${resp.status})`);
+  await write();
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Network map — mesh backhaul (child AP → parent AP)
-// ─────────────────────────────────────────────────────────────────
-
-/** The Unifi Poller's Prometheus export carries no wireless-uplink
- *  identity: every topology row is link_type="WIRED" and the uplink
- *  metrics expose no parent MAC/name. Mesh parents are therefore
- *  user-configured in Settings and stored as plain text. */
-const MESH_KEY = 'network/mesh-links';
-
-export async function loadMeshLinksText(): Promise<string | null> {
-  return kvGet(MESH_KEY);
-}
-
-export async function saveMeshLinksText(text: string): Promise<void> {
-  return kvPut(MESH_KEY, text.trim());
-}
-
-/** Parse `child = parent` lines (`->` and `→` accepted too). Blank
- *  lines and `#` comments are ignored. */
-export function parseMeshLinks(text: string | null): Array<[child: string, parent: string]> {
-  if (!text) return [];
-  const out: Array<[string, string]> = [];
-  for (const line of text.split('\n')) {
-    const t = line.trim();
-    if (!t || t.startsWith('#')) continue;
-    const m = t.match(/^(.+?)\s*(?:->|=|→)\s*(.+)$/);
-    if (m) out.push([m[1].trim(), m[2].trim()]);
-  }
-  return out;
-}
+const putKvJson = (key: string, value: unknown) => writeKv(() => kvPutJson(key, value), key);
 
 // ─────────────────────────────────────────────────────────────────
 // Connection metadata (public — the token is proxy-injected, not here)
@@ -113,44 +82,43 @@ export interface GoatTownConnection {
 const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, '');
 
 export async function loadConnection(): Promise<GoatTownConnection | null> {
-  try {
-    const raw = await kvGet(CONNECTION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { serviceUrl?: string; agent?: string };
-    const serviceUrl = normalizeUrl(parsed.serviceUrl ?? '');
-    if (!serviceUrl) return null;
-    return { serviceUrl, agent: (parsed.agent ?? '').trim() || DEFAULT_AGENT };
-  } catch {
-    return null;
-  }
+  const read = await kvGetJson<{ serviceUrl?: string; agent?: string }>(CONNECTION_KEY);
+  if (!read.found) return null;
+  const serviceUrl = normalizeUrl(read.value.serviceUrl ?? '');
+  if (!serviceUrl) return null;
+  return { serviceUrl, agent: (read.value.agent ?? '').trim() || DEFAULT_AGENT };
 }
 
+/** Save the public part of the connection. The credential is separate and
+ *  write-only; see {@link saveEmbedToken}. */
 export async function saveConnection(serviceUrl: string, agent: string): Promise<void> {
   const normalized = normalizeUrl(serviceUrl);
   if (!normalized) throw new Error('Service URL is required — refusing to save an empty connection.');
-  await kvPut(
-    CONNECTION_KEY,
-    JSON.stringify({
-      version: 1,
-      serviceUrl: normalized,
-      agent: agent.trim() || DEFAULT_AGENT,
-    }),
-  );
+  await putKvJson(CONNECTION_KEY, {
+    version: 1,
+    serviceUrl: normalized,
+    agent: agent.trim() || DEFAULT_AGENT,
+  });
 }
 
-/** The embed token is a write-only credential: it lands in the app's
- *  scoped KV and is resolved by the fetch proxy at request time
- *  (proxies.yml: `authorization: "'Bearer ' + kv.goattownEmbedToken"`).
- *  It is never read back into the browser. */
+/**
+ * Store the embed token.
+ *
+ * Write-only by design: the value lands in the app's scoped KV, the fetch
+ * proxy injects it as `authorization` for the declared host
+ * (`config/proxies.yml` → `kv.goattownEmbedToken`), and it is never read back
+ * into the browser. The framework's writer reports a rejected save instead of
+ * letting it look successful.
+ */
 export async function saveEmbedToken(token: string): Promise<void> {
   const trimmed = token.trim();
   if (!trimmed) throw new Error('Token is empty — nothing to save.');
-  await kvPut('goattownEmbedToken', trimmed);
+  await kvPutText(TOKEN_KEY, trimmed);
 }
 
-/** Key NAMES only (POST /kvstore/keys) — enough to verify that the
- *  connection record and the write-only token actually exist in the
- *  app's KV namespace without ever pulling the token's value back. */
+/** Key NAMES only (POST /kvstore/keys) — enough to show that the connection
+ *  record and the write-only credential exist without reading the credential
+ *  back. */
 export async function listKvKeys(prefix: string): Promise<string[]> {
   const resp = await fetch(`${apiUrl()}/kvstore/keys`, {
     method: 'POST',
@@ -168,97 +136,53 @@ export async function listKvKeys(prefix: string): Promise<string[]> {
       : [];
   return rows
     .map((row) =>
-      typeof row === 'string' ? row : ((row as { key?: string; name?: string })?.key ?? (row as { name?: string })?.name ?? ''),
+      typeof row === 'string'
+        ? row
+        : ((row as { key?: string; name?: string })?.key ?? (row as { name?: string })?.name ?? ''),
     )
     .filter((k): k is string => typeof k === 'string' && k.length > 0);
-}
-
-export interface RawConnectionRead {
-  status: number;
-  body: string;
-  connection: GoatTownConnection | null;
-  parseError: string | null;
-}
-
-/** The exact GET behind loadConnection, exposed for diagnostics. */
-export async function readConnectionRaw(): Promise<RawConnectionRead> {
-  let status = 0;
-  let body = '';
-  try {
-    const resp = await fetch(`${apiUrl()}/kvstore/goattown/connection`);
-    status = resp.status;
-    body = (await resp.text()).slice(0, 300);
-  } catch (e) {
-    return {
-      status: 0,
-      body: e instanceof Error ? e.message : String(e),
-      connection: null,
-      parseError: 'fetch failed',
-    };
-  }
-  if (status === 404) return { status, body, connection: null, parseError: null };
-  const trimmed = body.trim();
-  if (!trimmed || trimmed === '[object Object]') {
-    return {
-      status,
-      body,
-      connection: null,
-      parseError: trimmed
-        ? 'KV value is not JSON — it was probably stored with a JSON content-type (served back as [object Object])'
-        : 'KV value is empty',
-    };
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as { serviceUrl?: string; agent?: string };
-    const serviceUrl = normalizeUrl(parsed.serviceUrl ?? '');
-    if (!serviceUrl)
-      return { status, body, connection: null, parseError: 'saved JSON carries no serviceUrl' };
-    return {
-      status,
-      body,
-      connection: { serviceUrl, agent: (parsed.agent ?? '').trim() || DEFAULT_AGENT },
-      parseError: null,
-    };
-  } catch (e) {
-    return {
-      status,
-      body,
-      connection: null,
-      parseError: `JSON parse failed: ${e instanceof Error ? e.message : String(e)}`,
-    };
-  }
 }
 
 export interface ConnectionDiagnostics {
   connection: GoatTownConnection | null;
   connectionKeyExists: boolean | null;
   tokenKeyExists: boolean | null;
-  rawRead: RawConnectionRead | null;
+  /** Why the saved record could not be read, described from the framework's
+   *  typed KV failure (status and body kind — a routing failure reads like
+   *  one) and never from the stored value. */
+  readError: string | null;
+  /** Why the key listing failed, if it did. */
   error: string | null;
 }
 
-/** What the Investigate page and Settings page both show: is the
- *  connection saved, is the token saved, and did anything fail. */
+/** What the Investigate and Configuration pages both show: is the connection
+ *  saved, is the credential saved, and did anything fail. */
 export async function connectionDiagnostics(): Promise<ConnectionDiagnostics> {
   const diag: ConnectionDiagnostics = {
     connection: null,
     connectionKeyExists: null,
     tokenKeyExists: null,
-    rawRead: null,
+    readError: null,
     error: null,
   };
   try {
     const [connKeys, tokenKeys] = await Promise.all([
       listKvKeys('goattown'),
-      listKvKeys('goattownEmbedToken'),
+      listKvKeys(TOKEN_KEY),
     ]);
-    diag.connectionKeyExists = connKeys.includes('goattown/connection');
-    diag.tokenKeyExists = tokenKeys.includes('goattownEmbedToken');
+    diag.connectionKeyExists = connKeys.includes(CONNECTION_KEY);
+    diag.tokenKeyExists = tokenKeys.includes(TOKEN_KEY);
   } catch (e) {
     diag.error = e instanceof Error ? e.message : String(e);
   }
-  diag.rawRead = await readConnectionRaw();
-  diag.connection = diag.rawRead.connection;
+  try {
+    diag.connection = await loadConnection();
+  } catch (e) {
+    // Absence is not an error here: a genuinely missing key reads as
+    // `{found:false}` and yields null. Anything thrown is a misroute, a
+    // rejected read or an unparseable body, and it must not read as "unset".
+    diag.readError = e instanceof KvError ? e.message : e instanceof Error ? e.message : String(e);
+  }
   return diag;
 }
 
@@ -271,22 +195,27 @@ export interface SessionState {
   draft: string;
 }
 
+/** The framework's route-safe key builder — a raw member id containing `:` or
+ *  `%` never matched the KV router, so ids are hex-encoded into the key. */
+const sessionKey = (memberId: string) => memberKey('goattown-sessions', memberId);
+/** The key this app wrote before it used the framework builder. */
+const legacySessionKey = (memberId: string) => `goattown/sessions/${memberId}`;
+
 export async function loadSessionState(memberId: string): Promise<SessionState> {
-  try {
-    const raw = await kvGet(sessionsKey(memberId));
-    if (!raw) return { activeId: null, draft: '' };
-    const parsed = JSON.parse(raw) as Partial<SessionState>;
+  const keys = [sessionKey(memberId), legacySessionKey(memberId)];
+  for (const key of keys) {
+    const read = await kvGetJson<Partial<SessionState>>(key);
+    if (!read.found) continue;
     return {
-      activeId: typeof parsed.activeId === 'string' ? parsed.activeId : null,
-      draft: typeof parsed.draft === 'string' ? parsed.draft : '',
+      activeId: typeof read.value.activeId === 'string' ? read.value.activeId : null,
+      draft: typeof read.value.draft === 'string' ? read.value.draft : '',
     };
-  } catch {
-    return { activeId: null, draft: '' };
   }
+  return { activeId: null, draft: '' };
 }
 
 export async function saveSessionState(memberId: string, state: SessionState): Promise<void> {
-  await kvPut(sessionsKey(memberId), JSON.stringify(state));
+  await putKvJson(sessionKey(memberId), state);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -308,60 +237,35 @@ export async function memberClaim(): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Wire operations
+// Client
 // ─────────────────────────────────────────────────────────────────
 
-export class GoatTownError extends Error {
-  readonly status: number;
-  readonly detail: string;
-  readonly retryAfterMs: number | null;
-  constructor(status: number, detail: string, retryAfterMs: number | null = null) {
-    super(detail ? `GoatTown request failed (${status}): ${detail}` : `GoatTown request failed (${status})`);
-    this.name = 'GoatTownError';
-    this.status = status;
-    this.detail = detail;
-    this.retryAfterMs = retryAfterMs;
-  }
+export interface GoatTownClientHandle {
+  client: GoatTownClient;
+  /** Redacted record of every call the session made — what to show when an
+   *  answer looks empty. */
+  diagnostics: SessionDiagnostics;
 }
 
-interface CallInit {
-  method: 'GET' | 'POST';
-  body?: unknown;
-  signal?: AbortSignal;
-}
-
-async function request<T>(
-  conn: GoatTownConnection,
-  memberId: string,
-  path: string,
-  init: CallInit,
-): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  const onOuterAbort = () => controller.abort();
-  init.signal?.addEventListener('abort', onOuterAbort);
-  try {
-    const resp = await fetch(`${conn.serviceUrl}${path}`, {
-      method: init.method,
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json',
-        'x-goattown-user': memberId,
-      },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      const retryHeader = Number(resp.headers.get('retry-after'));
-      const retryAfterMs = Number.isFinite(retryHeader) && retryHeader > 0 ? retryHeader * 1000 : null;
-      const text = (await resp.text()).slice(0, 400);
-      throw new GoatTownError(resp.status, text, retryAfterMs);
-    }
-    return (await resp.json()) as T;
-  } finally {
-    clearTimeout(timer);
-    init.signal?.removeEventListener('abort', onOuterAbort);
-  }
+/**
+ * Build the framework client for a saved connection.
+ *
+ * `userId` resolves the acting Cribl member and is sent as
+ * `x-goattown-user`: sessions are owned per user, so a client without it
+ * reads someone else's list or none at all. Pass `memberId` when it is
+ * already resolved to avoid a second identity lookup.
+ */
+export function createClient(
+  connection: GoatTownConnection,
+  memberId?: string,
+): GoatTownClientHandle {
+  const diagnostics = new SessionDiagnostics();
+  const client = new GoatTownClient({
+    baseUrl: connection.serviceUrl,
+    userId: memberId ? async () => memberId : memberClaim,
+    onDiagnostic: diagnostics.sink,
+  });
+  return { client, diagnostics };
 }
 
 export interface GoatTownCapabilities {
@@ -373,315 +277,60 @@ export interface GoatTownCapabilities {
   archive?: boolean;
 }
 
-/** Core actions assumed when /protocol is unreachable; anything the
- *  protocol explicitly omits is treated as unsupported. */
-const DEFAULT_CAPABILITIES: GoatTownCapabilities = {
-  followUp: true,
-  stop: true,
-  close: true,
-  reopen: true,
-  archive: true,
+/** Session actions this app can offer at all. The framework client
+ *  implements every one of them. */
+const KNOWN_CAPABILITIES: readonly (keyof GoatTownCapabilities)[] = [
+  'followUp',
+  'stop',
+  'close',
+  'reopen',
+  'recover',
+  'archive',
+];
+
+/** Alias spellings a service may advertise for the same action. */
+const CAPABILITY_ALIASES: Record<keyof GoatTownCapabilities, string[]> = {
+  followUp: ['followup', 'session-followup', 'session-messages'],
+  stop: ['session-stop', 'session-cancel'],
+  close: ['session-close'],
+  reopen: ['session-reopen', 'session-resume'],
+  recover: ['session-recover'],
+  archive: ['session-archive'],
 };
 
-const CAPABILITY_KEYS = ['followUp', 'stop', 'close', 'reopen', 'recover', 'archive'] as const;
-
-export async function fetchCapabilities(
-  conn: GoatTownConnection,
-  memberId: string,
-): Promise<{ caps: GoatTownCapabilities; authoritative: boolean }> {
-  try {
-    const data = await request<Record<string, unknown>>(conn, memberId, '/protocol', { method: 'GET' });
-    const src = (data.capabilities ?? data) as Record<string, unknown>;
-    const caps: GoatTownCapabilities = {};
-    for (const key of CAPABILITY_KEYS) {
-      if (src[key] === true) caps[key] = true;
-    }
-    return { caps, authoritative: true };
-  } catch {
-    return { caps: { ...DEFAULT_CAPABILITIES }, authoritative: false };
-  }
-}
-
-export interface InvestigationSummary {
-  id: string;
-  title: string;
-  status: SessionStatus;
-  mode?: string;
-  createdAt: number;
-  concludedAt: number | null;
-}
-
-export async function listInvestigations(
-  conn: GoatTownConnection,
-  memberId: string,
-  agent: string,
-): Promise<InvestigationSummary[]> {
-  const data = await request<{ investigations?: unknown }>(
-    conn,
-    memberId,
-    `/investigations?agent=${encodeURIComponent(agent)}`,
-    { method: 'GET' },
-  );
-  const rows = Array.isArray(data.investigations) ? data.investigations : [];
-  return rows
-    .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object' && typeof (r as { id?: unknown }).id === 'string')
-    .map((r) => ({
-      id: String(r.id),
-      title: typeof r.title === 'string' && r.title ? r.title : 'Investigation',
-      status: (typeof r.status === 'string' ? r.status : 'concluded') as SessionStatus,
-      mode: typeof r.mode === 'string' ? r.mode : undefined,
-      createdAt: Number(r.createdAt ?? r.created_at ?? 0),
-      concludedAt: typeof r.concludedAt === 'number' ? r.concludedAt : null,
-    }))
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 50);
-}
-
-export async function createInvestigation(
-  conn: GoatTownConnection,
-  memberId: string,
-  input: { agent: string; prompt: string; title: string },
-): Promise<{ id: string }> {
-  const data = await request<{ id?: string; investigation?: { id?: string } }>(
-    conn,
-    memberId,
-    '/investigations',
-    { method: 'POST', body: { agent: input.agent, prompt: input.prompt, title: input.title } },
-  );
-  const id = data.id ?? data.investigation?.id;
-  if (!id) throw new GoatTownError(0, 'Create succeeded but the response carried no investigation id.');
-  return { id: String(id) };
-}
-
-export interface ObserveBatch {
-  status: SessionStatus;
-  latestSeq: number;
-  events: Array<{ seq: number; ev: WireLoopEvent }>;
-  title?: string | null;
-}
-
-/** Status + fresh events since a cursor. Older-event responses use
- *  `frames`; tolerate either field name. */
-export async function observeInvestigation(
-  conn: GoatTownConnection,
-  memberId: string,
-  id: string,
-  eventsSince: number,
-  signal?: AbortSignal,
-): Promise<ObserveBatch> {
-  const data = await request<Record<string, unknown>>(
-    conn,
-    memberId,
-    `/investigations/${encodeURIComponent(id)}/status?eventsSince=${eventsSince}`,
-    { method: 'GET', signal },
-  );
-  return toBatch(data);
-}
-
-/** Older-events fallback (GET …/events?since=) used for backfill. */
-export async function fetchEvents(
-  conn: GoatTownConnection,
-  memberId: string,
-  id: string,
-  since: number,
-  signal?: AbortSignal,
-): Promise<ObserveBatch> {
-  const data = await request<Record<string, unknown>>(
-    conn,
-    memberId,
-    `/investigations/${encodeURIComponent(id)}/events?since=${since}`,
-    { method: 'GET', signal },
-  );
-  return toBatch(data);
-}
-
-function toBatch(data: Record<string, unknown>): ObserveBatch {
-  const raw = (
-    Array.isArray(data.events) ? data.events : Array.isArray(data.frames) ? data.frames : []
-  ) as Array<{ seq?: number; ev?: WireLoopEvent }>;
-  const events = raw
-    .filter((f): f is { seq: number; ev: WireLoopEvent } => !!f && !!f.ev)
-    .map((f) => ({ seq: Number(f.seq ?? 0), ev: f.ev }));
-  return {
-    status: (typeof data.status === 'string' ? data.status : 'running') as SessionStatus,
-    latestSeq: Number(data.latestSeq ?? 0),
-    events,
-    title: typeof data.title === 'string' ? data.title : null,
-  };
-}
-
-export async function sendMessage(
-  conn: GoatTownConnection,
-  memberId: string,
-  id: string,
-  content: string,
-): Promise<void> {
-  await request(conn, memberId, `/investigations/${encodeURIComponent(id)}/messages`, {
-    method: 'POST',
-    body: { content },
-  });
-}
-
-export type LifecycleAction = 'stop' | 'close' | 'reopen' | 'recover';
-
-export async function runLifecycle(
-  conn: GoatTownConnection,
-  memberId: string,
-  id: string,
-  action: LifecycleAction,
-): Promise<void> {
-  await request(conn, memberId, `/investigations/${encodeURIComponent(id)}/${action}`, {
-    method: 'POST',
-  });
-}
-
-export async function setArchived(
-  conn: GoatTownConnection,
-  memberId: string,
-  id: string,
-  archived: boolean,
-): Promise<void> {
-  await request(conn, memberId, `/investigations/${encodeURIComponent(id)}/archive`, {
-    method: 'POST',
-    body: { archived },
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Wire → transcript folding
-// ─────────────────────────────────────────────────────────────────
-
 /**
- * Fold a wire event into transcript entries. `userMessage` and `error`
- * are handled here (they are not framework LoopEvents / carry a plain
- * message); everything else is structurally identical and goes through
- * the framework reducer so server-run transcripts render pixel-identical
- * to client-run ones. Optimistic local echoes (ids prefixed `local-`)
- * are reconciled against the canonical userMessage instead of duplicated.
+ * Which session actions the service declares.
  *
- * Implementation lives in `./wire-fold` (pure, dependency-light, unit-tested);
- * re-exported here so callers keep a single import site.
+ * Read from the client's `/protocol` response; pass `refresh` for a
+ * user-initiated re-check, because the cached answer is from before an
+ * administrator's toggle took effect.
+ *
+ * An action is taken as supported unless the service explicitly denies it
+ * (i.e. names it `no-<action>`/`<action>:false`), because the protocol's
+ * vocabulary is open and has changed names before: treating "not mentioned"
+ * as "unsupported" is what would hide every lifecycle button in front of a
+ * service that renamed one.
  */
-export { foldWireEvents };
-
-/** Replay a whole session from the older-events endpoint (bounded). */
-export async function loadTranscript(
-  conn: GoatTownConnection,
-  memberId: string,
-  id: string,
-  signal?: AbortSignal,
-): Promise<{ entries: InvestigatorTranscriptEntry[]; status: SessionStatus; latestSeq: number }> {
-  let entries: InvestigatorTranscriptEntry[] = [];
-  let since = 0;
-  let latestSeq = 0;
-  let status: SessionStatus = 'running';
-  for (let page = 0; page < MAX_BACKFILL_PAGES; page++) {
-    const batch = await fetchEvents(conn, memberId, id, since, signal);
-    latestSeq = Math.max(latestSeq, batch.latestSeq);
-    status = batch.status;
-    const fresh = batch.events.filter((e) => e.seq > since);
-    if (fresh.length === 0) break;
-    for (const event of fresh) {
-      entries = foldWireEvents(entries, event.ev);
-      since = Math.max(since, event.seq);
-    }
-    if (since >= latestSeq) break;
+export async function sessionCapabilities(
+  client: GoatTownClient,
+  options: { refresh?: boolean } = {},
+): Promise<GoatTownCapabilities> {
+  let protocol: ProtocolResponse;
+  try {
+    protocol = options.refresh ? await client.refreshProtocol() : await client.protocol();
+  } catch {
+    // Unreachable protocol: the session calls themselves will report the
+    // real failure, so keep the UI usable rather than hiding its controls.
+    return Object.fromEntries(KNOWN_CAPABILITIES.map((k) => [k, true]));
   }
-  return { entries, status, latestSeq };
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Bounded poller — no overlapping polls, paused hidden pages,
-// aborts on stop, stale-response guarded, honors Retry-After.
-// ─────────────────────────────────────────────────────────────────
-
-export interface FeedHandlers {
-  onBatch: (batch: ObserveBatch) => void;
-  onError: (error: Error) => void;
-}
-
-export class InvestigationFeed {
-  private cursor = 0;
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private inFlight: AbortController | null = null;
-  private pollingNow = false;
-  private stopped = true;
-  private backoffMs = 0;
-
-  constructor(
-    private readonly conn: GoatTownConnection,
-    private readonly memberId: string,
-    private readonly id: string,
-    private readonly handlers: FeedHandlers,
-  ) {}
-
-  start(fromSeq = 0): void {
-    this.cursor = fromSeq;
-    this.stopped = false;
-    this.backoffMs = 0;
-    document.addEventListener('visibilitychange', this.onVisibility);
-    this.schedule(0);
+  const declared = new Set((protocol.capabilities ?? []).map((c) => c.toLowerCase()));
+  const caps: GoatTownCapabilities = {};
+  for (const key of KNOWN_CAPABILITIES) {
+    const names = [key.toLowerCase(), ...CAPABILITY_ALIASES[key]];
+    const denied = names.some(
+      (name) => declared.has(`no-${name}`) || declared.has(`${name}:false`),
+    );
+    caps[key] = !denied;
   }
-
-  stop(): void {
-    this.stopped = true;
-    document.removeEventListener('visibilitychange', this.onVisibility);
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
-    this.inFlight?.abort();
-    this.inFlight = null;
-  }
-
-  private onVisibility = (): void => {
-    if (this.stopped) return;
-    if (document.hidden) {
-      if (this.timer !== null) clearTimeout(this.timer);
-      this.timer = null;
-      this.inFlight?.abort();
-      this.inFlight = null;
-      this.pollingNow = false;
-    } else {
-      this.schedule(0);
-    }
-  };
-
-  private schedule(delayMs: number): void {
-    if (this.stopped || document.hidden) return;
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.poll(), delayMs);
-  }
-
-  private async poll(): Promise<void> {
-    if (this.stopped || this.pollingNow || document.hidden) return;
-    this.pollingNow = true;
-    this.inFlight = new AbortController();
-    let nextDelayMs = IDLE_POLL_MS;
-    let terminal = false;
-    try {
-      const batch = await observeInvestigation(
-        this.conn,
-        this.memberId,
-        this.id,
-        this.cursor,
-        this.inFlight.signal,
-      );
-      const fresh = batch.events.filter((e) => e.seq > this.cursor);
-      for (const event of fresh) this.cursor = Math.max(this.cursor, event.seq);
-      this.backoffMs = 0;
-      nextDelayMs =
-        batch.status === 'running' || batch.status === 'queued' ? RUNNING_POLL_MS : IDLE_POLL_MS;
-      terminal = isTerminalStatus(batch.status);
-      this.handlers.onBatch({ ...batch, events: fresh });
-    } catch (error) {
-      if (this.stopped || (error instanceof DOMException && error.name === 'AbortError')) return;
-      this.handlers.onError(error instanceof Error ? error : new Error(String(error)));
-      const retryAfter = error instanceof GoatTownError ? error.retryAfterMs : null;
-      this.backoffMs = Math.min(this.backoffMs ? this.backoffMs * 2 : RUNNING_POLL_MS, MAX_BACKOFF_MS);
-      nextDelayMs = Math.max(this.backoffMs, retryAfter ?? 0);
-    } finally {
-      this.pollingNow = false;
-      this.inFlight = null;
-    }
-    if (!terminal && !this.stopped) this.schedule(nextDelayMs);
-  }
+  return caps;
 }

@@ -4,41 +4,36 @@ import {
   InvestigatorTranscript,
   type InvestigatorTranscriptEntry,
 } from '@criblio/app-utils/investigator';
+import { exportAsPng } from '@criblio/app-utils/investigator';
 import MetricsToolCard from '@criblio/app-utils/investigator/metrics-tool-card';
 import type { MetricsQueryUi } from '@criblio/app-utils/agent-tools';
-import { exportAsPng } from '@criblio/app-utils/investigator';
-import { titleFromPrompt } from '@criblio/agent-protocol';
-import { isTerminalStatus } from '@criblio/agent-protocol';
-import type { SessionStatus } from '@criblio/agent-protocol';
 import {
-  buildServerPrompt,
-  SUGGESTED_QUESTIONS,
-} from '../api/investigator';
+  GoatTownError,
+  observeSession,
+  type GoatTownClient,
+} from '@criblio/app-utils/goattown';
+import { titleFromPrompt, isTerminalStatus } from '@criblio/agent-protocol';
+import type { SessionStatus, SessionSummaryRow } from '@criblio/agent-protocol';
+import { buildServerPrompt, SUGGESTED_QUESTIONS } from '../api/investigator';
+import { foldEvent, foldUserTurn } from '../api/transcript';
 import {
   connectionDiagnostics,
-  createInvestigation,
-  fetchCapabilities,
-  foldWireEvents,
-  InvestigationFeed,
-  listInvestigations,
+  createClient,
+  DEFAULT_AGENT,
   loadConnection,
   loadSessionState,
-  loadTranscript,
   memberClaim,
-  runLifecycle,
   saveSessionState,
-  sendMessage,
-  setArchived,
+  sessionCapabilities,
   type GoatTownCapabilities,
   type GoatTownConnection,
-  type InvestigationSummary,
-  type LifecycleAction,
 } from '../api/goattown';
-import type { WireLoopEvent } from '@criblio/agent-protocol';
 import s from './InvestigatePage.module.css';
 
 /** Default context window: the last hour, snapshotted absolutely. */
 const contextWindow = () => ({ earliestMs: Date.now() - 3_600_000, latestMs: Date.now() });
+
+type LifecycleAction = 'stop' | 'close' | 'reopen' | 'recover';
 
 const STATUS_LABEL: Record<string, string> = {
   queued: 'queued',
@@ -58,7 +53,7 @@ export default function InvestigatePage() {
   const [memberId, setMemberId] = useState<string | null>(null);
   const [memberError, setMemberError] = useState<string | null>(null);
   const [caps, setCaps] = useState<GoatTownCapabilities>({});
-  const [history, setHistory] = useState<InvestigationSummary[]>([]);
+  const [history, setHistory] = useState<SessionSummaryRow[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState<string | null>(null);
   const [entries, setEntries] = useState<InvestigatorTranscriptEntry[]>([]);
@@ -69,10 +64,23 @@ export default function InvestigatePage() {
   const [approvalNotice, setApprovalNotice] = useState(false);
   const [exportedPng, setExportedPng] = useState<string | null>(null);
 
-  const feedRef = useRef<InvestigationFeed | null>(null);
+  /** Transcript observer for the session on screen. Observation runs until
+   *  the turn's receipt drains; leaving the page or switching sessions
+   *  aborts it. */
+  const observeRef = useRef<AbortController | null>(null);
+  /** Last consumed seq, so a follow-up resumes instead of replaying. */
+  const cursorRef = useRef(0);
   const transcriptInnerRef = useRef<HTMLDivElement | null>(null);
   const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const consumedSeed = useRef<string | null>(null);
+
+  /** The framework client for the saved connection. Identity is resolved per
+   *  call and sent as x-goattown-user. */
+  const handle = useMemo(
+    () => (conn ? createClient(conn, memberId ?? undefined) : null),
+    [conn, memberId],
+  );
+  const client = handle?.client ?? null;
 
   const seed = useMemo(() => {
     const state = location.state as { question?: string } | null;
@@ -86,54 +94,79 @@ export default function InvestigatePage() {
     navigate('/investigate', { replace: true });
   }, [navigate]);
 
-  const refreshHistory = useCallback(async (connection: GoatTownConnection, member: string) => {
+  const refreshHistory = useCallback(async (gt: GoatTownClient) => {
     try {
-      setHistory(await listInvestigations(connection, member, connection.agent));
+      setHistory(await gt.listSessions({ agent: DEFAULT_AGENT, limit: 25 }));
     } catch {
       /* history is best-effort; the banner shows hard failures */
     }
   }, []);
 
+  /**
+   * Follow a session's transcript.
+   *
+   * `requestId` pins observation to one turn's receipt — the turn this page
+   * just started — while omitting it follows whatever the service last
+   * accepted, which is what reattaching to an existing session wants.
+   * `seed` replaces the transcript before replaying; without it the observer
+   * resumes from the cursor already consumed, so a follow-up appends instead
+   * of replaying the whole session.
+   */
+  const follow = useCallback(
+    async (
+      gt: GoatTownClient,
+      sessionId: string,
+      opts: { requestId?: string; seed?: InvestigatorTranscriptEntry[] } = {},
+    ) => {
+      observeRef.current?.abort();
+      const controller = new AbortController();
+      observeRef.current = controller;
+      if (opts.seed) {
+        cursorRef.current = 0;
+        setEntries(opts.seed);
+      }
+      const result = await observeSession(gt, sessionId, {
+        since: opts.seed ? 0 : cursorRef.current,
+        requestId: opts.requestId,
+        signal: controller.signal,
+        onEvent: (ev) => setEntries((prev) => foldEvent(prev, ev)),
+        onUserMessage: (content, seq) => setEntries((prev) => foldUserTurn(prev, content, seq)),
+        onStatus: setStatus,
+        onCursor: (seq) => {
+          cursorRef.current = seq;
+        },
+        onError: (err) => setError(err instanceof Error ? err.message : String(err)),
+      });
+      cursorRef.current = result.cursor;
+      setStatus(result.status);
+      if (result.reason === 'stalled') {
+        setError(
+          'GoatTown stopped delivering events for this turn — the transcript below may be incomplete.',
+        );
+      }
+      if (isTerminalStatus(result.status)) void refreshHistory(gt);
+      return result;
+    },
+    [refreshHistory],
+  );
+
   const attach = useCallback(
-    async (connection: GoatTownConnection, member: string, id: string) => {
+    async (gt: GoatTownClient, id: string, title?: string) => {
       setBusy('switching');
       setError(null);
+      setActiveId(id);
+      setActiveTitle(title ?? null);
       try {
-        const backfill = await loadTranscript(connection, member, id);
-        setEntries(backfill.entries);
-        setStatus(backfill.status);
-        setActiveTitle(null);
-        feedRef.current?.stop();
-        const feed = new InvestigationFeed(connection, member, id, {
-          onBatch: (batch) => {
-            setEntries((prev) => {
-              let next = prev;
-              for (const event of batch.events) next = foldSafe(next, event.ev);
-              return next;
-            });
-            setStatus(batch.status);
-            if (batch.title) setActiveTitle(batch.title);
-            if (
-              batch.status === 'concluded' ||
-              batch.status === 'failed' ||
-              batch.status === 'cancelled'
-            ) {
-              feedRef.current?.stop();
-              void refreshHistory(connection, member);
-            }
-          },
-          onError: (err) => setError(err.message),
-        });
-        feedRef.current = feed;
-        feed.start(backfill.latestSeq);
-        setActiveId(id);
+        await follow(gt, id, { seed: [] });
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
         setBusy(null);
       }
     },
-    [refreshHistory],
+    [follow],
   );
 
   // Re-read the connection after the user links GoatTown on the
@@ -144,7 +177,8 @@ export default function InvestigatePage() {
     const diag = await connectionDiagnostics();
     setConn(diag.connection);
     if (!diag.connection) {
-      if (diag.error) setError(`GoatTown link check failed: ${diag.error}`);
+      if (diag.readError) setError(`GoatTown link check failed: ${diag.readError}`);
+      else if (diag.error) setError(`GoatTown link check failed: ${diag.error}`);
       else if (diag.connectionKeyExists === false && diag.tokenKeyExists === false)
         setError(
           'GoatTown is not configured yet — neither the service URL nor the embed token is saved. Set both under Configuration → GoatTown connection, then recheck.',
@@ -157,24 +191,23 @@ export default function InvestigatePage() {
         setError(
           'The embed token is not saved — the fetch proxy cannot authenticate to GoatTown without it. Save it under Configuration → GoatTown connection (leave the URL as is), then recheck.',
         );
-      else if (diag.connectionKeyExists && !diag.connection) {
-        const raw = diag.rawRead;
-        setError(
-          `Saved connection unreadable — GET goattown/connection → HTTP ${raw?.status ?? '?'}` +
-            (raw?.parseError ? `: ${raw.parseError}` : '') +
-            (raw?.body ? ` — body: ${raw.body.slice(0, 140)}` : ''),
-        );
-      } else setError('A GoatTown connection is saved but could not be read back.');
+      else setError('A GoatTown connection is saved but could not be read back.');
       return;
     }
+    const gt = createClient(diag.connection, memberId ?? undefined);
+    void sessionCapabilities(gt.client, { refresh: true })
+      .then(setCaps)
+      .catch(() => setCaps({}));
+    void refreshHistory(gt.client);
     if (memberId) {
-      void fetchCapabilities(diag.connection, memberId).then(({ caps: c }) => setCaps(c));
-      void refreshHistory(diag.connection, memberId);
       const state = await loadSessionState(memberId);
       setDraft((prev) => prev || state.draft);
-      if (state.activeId) void attach(diag.connection, memberId, state.activeId);
+      if (state.activeId) {
+        const row = history.find((h) => h.id === state.activeId);
+        await attach(gt.client, state.activeId, row?.title);
+      }
     }
-  }, [memberId, refreshHistory, attach]);
+  }, [memberId, attach, refreshHistory, history]);
 
   // Boot: identity → connection → persisted session (reattach, never restart).
   useEffect(() => {
@@ -189,12 +222,13 @@ export default function InvestigatePage() {
         setConn(connection);
         setConnLoaded(true);
         if (!connection) return;
-        void fetchCapabilities(connection, member).then(({ caps: c }) => !cancelled && setCaps(c));
-        void refreshHistory(connection, member);
+        const gt = createClient(connection, member);
+        void sessionCapabilities(gt.client).then((c) => !cancelled && setCaps(c)).catch(() => undefined);
+        void refreshHistory(gt.client);
         const state = await loadSessionState(member);
         if (cancelled) return;
         setDraft(state.draft);
-        if (state.activeId) void attach(connection, member, state.activeId);
+        if (state.activeId) await attach(gt.client, state.activeId);
       } catch (err) {
         if (!cancelled) {
           setConnLoaded(true);
@@ -204,7 +238,7 @@ export default function InvestigatePage() {
     })();
     return () => {
       cancelled = true;
-      feedRef.current?.stop();
+      observeRef.current?.abort();
     };
   }, [attach, refreshHistory]);
 
@@ -220,71 +254,55 @@ export default function InvestigatePage() {
   }, [draft, memberId]);
 
   const startInvestigation = useCallback(
-    async (question: string, connection: GoatTownConnection, member: string) => {
-      if (busy) return;
+    async (question: string) => {
+      if (!client || !memberId || busy) return;
       setBusy('creating');
       setError(null);
       const window = contextWindow();
       const entity = question.match(/(?:access point|switch|client|gateway)\s+"([^"]+)"/i)?.[1];
       const title = titleFromPrompt(question);
-      const attach = (id: string, initialStatus: SessionStatus) => {
-        setEntries([{ kind: 'user', id: 'local-open', content: question }]);
-        setStatus(initialStatus);
-        setActiveTitle(title);
-        feedRef.current?.stop();
-        const feed = new InvestigationFeed(connection, member, id, {
-          onBatch: (batch) => {
-            setEntries((prev) => {
-              let next = prev;
-              for (const event of batch.events) next = foldSafe(next, event.ev);
-              return next;
-            });
-            setStatus(batch.status);
-            if (batch.title) setActiveTitle(batch.title);
-            if (
-              batch.status === 'concluded' ||
-              batch.status === 'failed' ||
-              batch.status === 'cancelled'
-            ) {
-              feedRef.current?.stop();
-              void refreshHistory(connection, member);
-            }
-          },
-          onError: (err) => setError(err.message),
-        });
-        feedRef.current = feed;
-        feed.start(0);
+      const seed: InvestigatorTranscriptEntry[] = [
+        { kind: 'user', id: `local-${Date.now()}`, content: question },
+      ];
+      const start = async (id: string, initialStatus: SessionStatus, sessionTitle?: string) => {
         setActiveId(id);
-      };
-      try {
-        const { id } = await createInvestigation(connection, member, {
-          agent: connection.agent,
-          prompt: buildServerPrompt({ question }, { entity, ...window }),
-          title,
-        });
-        attach(id, 'queued');
+        setActiveTitle(sessionTitle ?? title);
+        setStatus(initialStatus);
         /* Session-pointer persistence is best-effort: a KV failure must
            never detach or blank a live investigation. */
-        await saveSessionState(member, { activeId: id, draft: '' }).catch(() => undefined);
+        await saveSessionState(memberId, { activeId: id, draft: '' }).catch(() => undefined);
         setDraft('');
-        void refreshHistory(connection, member);
+        void refreshHistory(client);
+      };
+      try {
+        const receipt = await client.createSession({
+          prompt: buildServerPrompt({ question }, { entity, ...window }),
+          agent: DEFAULT_AGENT,
+          title,
+        });
+        await start(receipt.id, 'queued', receipt.title);
+        await follow(client, receipt.id, { requestId: receipt.requestId, seed });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const aborted =
-          (err instanceof DOMException && err.name === 'AbortError') || /abort|timed?\s?out/i.test(message);
-        if (!aborted) {
+        const gtErr = err instanceof GoatTownError ? err : null;
+        // An answer we can act on (4xx) is a real failure and must not be
+        // reconciled into "maybe it started anyway".
+        if (gtErr && gtErr.status >= 400 && gtErr.status < 500) {
           setError(
-            `${message}${message.includes('403') ? ' — the GoatTown host may be missing from config/proxies.yml or the embed token is not provisioned.' : ''}`,
+            gtErr.isPermanentAuthFailure
+              ? `${message} — the GoatTown host may be missing from config/proxies.yml, or the embed token is not provisioned.`
+              : message,
           );
           return;
         }
-        // Ambiguous create: the request hit its client-side timeout, but
-        // GoatTown may have created the session anyway. Reconcile against
-        // server history instead of retrying (a retry would duplicate it).
+        // Ambiguous create: no usable answer came back (a proxy timeout or a
+        // dropped connection), but GoatTown may have created the session
+        // anyway. Reconcile against server history instead of retrying — a
+        // retry would start a second session.
         try {
-          const history = await listInvestigations(connection, member, connection.agent);
+          const history = await client.listSessions({ agent: DEFAULT_AGENT, limit: 25 });
           const recent = (ts: number) =>
-            (Date.now() - ts < 10 * 60_000) || (Date.now() / 1000 - ts < 600);
+            Date.now() - ts < 10 * 60_000 || Date.now() / 1000 - ts < 600;
           const candidate = history.find((h) => recent(h.createdAt) && !isTerminalStatus(h.status));
           if (!candidate) {
             setError(
@@ -292,13 +310,12 @@ export default function InvestigatePage() {
             );
             return;
           }
-          attach(candidate.id, candidate.status);
-          await saveSessionState(member, { activeId: candidate.id, draft: '' }).catch(() => undefined);
-          setDraft('');
+          await start(candidate.id, candidate.status, candidate.title);
+          await follow(client, candidate.id, { seed });
           setError(
             `The create request timed out client-side, but GoatTown did start the session — attached to ${candidate.id.slice(0, 8)}…`,
           );
-          void refreshHistory(connection, member);
+          void refreshHistory(client);
         } catch (reconcileErr) {
           setError(
             `The create request timed out and reconciling history failed: ${reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr)}`,
@@ -308,80 +325,81 @@ export default function InvestigatePage() {
         setBusy(null);
       }
     },
-    [busy, refreshHistory],
+    [busy, client, memberId, follow, refreshHistory],
   );
 
   // An explicit Investigate action (entity button or ?q= link) starts
   // exactly once; it is consumed so reload/mount never restarts work.
   useEffect(() => {
-    if (!seed || !conn || !memberId || busy) return;
+    if (!seed || !client || !memberId || busy) return;
     if (consumedSeed.current === seed.question) return;
     consumedSeed.current = seed.question;
     const question = seed.question;
     consumeSeed();
-    void startInvestigation(question, conn, memberId);
-  }, [seed, conn, memberId, busy, consumeSeed, startInvestigation]);
+    void startInvestigation(question);
+  }, [seed, client, memberId, busy, consumeSeed, startInvestigation]);
 
   const sendFollowUp = useCallback(async () => {
-    if (!conn || !memberId || !activeId || !draft.trim()) return;
+    if (!client || !memberId || !activeId || !draft.trim()) return;
     setBusy('sending');
     setError(null);
     const content = draft.trim();
     setEntries((prev) => [...prev, { kind: 'user', id: `local-${Date.now()}`, content }]);
     setDraft('');
     try {
-      await sendMessage(conn, memberId, activeId, content);
+      const receipt = await client.sendMessage(activeId, content);
       setStatus('running');
+      await follow(client, activeId, { requestId: receipt.requestId });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStatus((prev) => prev ?? 'idle');
     } finally {
       setBusy(null);
     }
-  }, [conn, memberId, activeId, draft]);
+  }, [client, memberId, activeId, draft, follow]);
 
   const doLifecycle = useCallback(
     async (action: LifecycleAction) => {
-      if (!conn || !memberId || !activeId) return;
+      if (!client || !memberId || !activeId) return;
       setError(null);
       try {
-        await runLifecycle(conn, memberId, activeId, action);
-        if (action === 'stop') setStatus('cancelled');
+        const { status: next } = await client[action](activeId);
         if (action === 'close') {
-          feedRef.current?.stop();
-          setStatus('cancelled');
+          observeRef.current?.abort();
           setActiveId(null);
           setEntries([]);
+          setStatus(null);
           await saveSessionState(memberId, { activeId: null, draft }).catch(() => undefined);
+        } else {
+          setStatus(next);
         }
-        if (action === 'reopen' || action === 'recover') setStatus('idle');
-        void refreshHistory(conn, memberId);
+        void refreshHistory(client);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [conn, memberId, activeId, draft, refreshHistory],
+    [client, memberId, activeId, draft, refreshHistory],
   );
 
   const doArchive = useCallback(
     async (id: string) => {
-      if (!conn || !memberId) return;
+      if (!client || !memberId) return;
       setError(null);
       try {
-        await setArchived(conn, memberId, id, true);
+        await client.archive(id);
         if (id === activeId) {
-          feedRef.current?.stop();
+          observeRef.current?.abort();
           setActiveId(null);
           setEntries([]);
           setStatus(null);
           await saveSessionState(memberId, { activeId: null, draft }).catch(() => undefined);
         }
-        void refreshHistory(conn, memberId);
+        void refreshHistory(client);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [conn, memberId, activeId, draft, refreshHistory],
+    [client, memberId, activeId, draft, refreshHistory],
   );
 
   const doExport = useCallback(async () => {
@@ -453,16 +471,16 @@ export default function InvestigatePage() {
             <span className={s.chatTitle}>{activeTitle ?? 'New investigation'}</span>
             {status && <span className={`${s.chip} ${s[`chip_${status}`] ?? ''}`}>{STATUS_LABEL[status] ?? status}</span>}
             <span className={s.spacer} />
-            {conn && memberId && activeId && status === 'running' && caps.stop !== false && (
+            {client && memberId && activeId && status === 'running' && caps.stop !== false && (
               <button onClick={() => void doLifecycle('stop')}>Stop</button>
             )}
-            {conn && memberId && activeId && status === 'idle' && caps.close && (
+            {client && memberId && activeId && status === 'idle' && caps.close && (
               <button onClick={() => void doLifecycle('close')}>Close</button>
             )}
-            {conn && memberId && activeId && (status === 'cancelled' || status === 'concluded') && caps.reopen && (
+            {client && memberId && activeId && (status === 'cancelled' || status === 'concluded') && caps.reopen && (
               <button onClick={() => void doLifecycle('reopen')}>Reopen</button>
             )}
-            {conn && memberId && activeId && status === 'failed' && caps.recover && (
+            {client && memberId && activeId && status === 'failed' && caps.recover && (
               <button onClick={() => void doLifecycle('recover')}>Recover</button>
             )}
           </div>
@@ -482,9 +500,9 @@ export default function InvestigatePage() {
                       <button
                         key={suggestion}
                         className={s.suggestion}
-                        disabled={!conn || !memberId || busy !== null}
+                        disabled={!client || !memberId || busy !== null}
                         onClick={() => {
-                          if (conn && memberId) void startInvestigation(suggestion, conn, memberId);
+                          void startInvestigation(suggestion);
                         }}
                       >
                         {suggestion}
@@ -509,7 +527,7 @@ export default function InvestigatePage() {
               className={s.composerTextarea}
               rows={2}
               placeholder={
-                conn && memberId
+                client && memberId
                   ? activeId
                     ? 'Ask a follow-up…'
                     : 'Describe what to investigate…'
@@ -517,14 +535,14 @@ export default function InvestigatePage() {
               }
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              disabled={!conn || !memberId || busy === 'creating'}
+              disabled={!client || !memberId || busy === 'creating'}
             />
             {activeId ? (
               <button
                 className={s.send}
                 onClick={() => void sendFollowUp()}
                 disabled={
-                  !conn ||
+                  !client ||
                   !memberId ||
                   busy !== null ||
                   running ||
@@ -537,8 +555,8 @@ export default function InvestigatePage() {
             ) : (
               <button
                 className={s.send}
-                onClick={() => conn && memberId && void startInvestigation(draft.trim(), conn, memberId)}
-                disabled={!conn || !memberId || busy !== null || !draft.trim()}
+                onClick={() => void startInvestigation(draft.trim())}
+                disabled={!client || !memberId || busy !== null || !draft.trim()}
               >
                 {busy === 'creating' ? 'Starting…' : 'Investigate'}
               </button>
@@ -579,9 +597,11 @@ export default function InvestigatePage() {
                   <li key={item.id} className={item.id === activeId ? s.historyActive : undefined}>
                     <button
                       className={s.historyItem}
-                      disabled={busy === 'switching' || !conn || !memberId}
+                      disabled={busy === 'switching' || !client || !memberId}
                       title={item.title}
-                      onClick={() => conn && memberId && void attach(conn, memberId, item.id)}
+                      onClick={() => {
+                        if (client) void attach(client, item.id, item.title);
+                      }}
                     >
                       <span className={s.historyTitle}>{item.title}</span>
                       <span className={s.historyMeta}>
@@ -624,17 +644,4 @@ export default function InvestigatePage() {
       )}
     </div>
   );
-}
-
-/** foldWireEvents that never throws mid-render: a malformed event is
- *  dropped rather than taking the transcript down. */
-function foldSafe(
-  prev: InvestigatorTranscriptEntry[],
-  ev: WireLoopEvent,
-): InvestigatorTranscriptEntry[] {
-  try {
-    return foldWireEvents(prev, ev);
-  } catch {
-    return prev;
-  }
 }

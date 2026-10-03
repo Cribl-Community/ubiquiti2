@@ -143,7 +143,6 @@ export default function SetupPage() {
   if (loading) {
     return (
       <div style={{ maxWidth: 860 }}>
-        <h1 style={{ marginBottom: 16 }}>Setup</h1>
         <p style={{ color: MUTED, fontSize: SMALL }}>Checking what already exists…</p>
       </div>
     );
@@ -154,7 +153,6 @@ export default function SetupPage() {
 
   return (
     <div style={{ maxWidth: 860 }}>
-      <h1 style={{ marginBottom: 8 }}>Setup</h1>
       <p style={{ color: MUTED, fontSize: SMALL, marginBottom: 16 }}>
         Checks what exists in this workspace and creates only what is missing. Alerts are monitored
         directly on the unpoller metrics already arriving here — no saved searches, no derived metrics.

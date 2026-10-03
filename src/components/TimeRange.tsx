@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { TIME_RANGES, binSecondsFor, type TimeRangeOption } from '@criblio/app-utils/time';
+import { useRangeParam } from '@criblio/app-utils/url-state';
 
 /**
  * Shared time-range picker state for the dashboard pages. The range
@@ -6,28 +8,24 @@ import { useEffect, useState } from 'react';
  * window granularity for PromQL); `refreshKey` bumps on the ↻ button
  * and on the auto-refresh interval, so effects key on it to refetch.
  *
- * The labels/values are the ones the original app's pickers used —
- * the pages' selects were uncontrolled decoration until this hook
- * replaced them.
+ * The catalog (labels, relative bounds and bin widths) comes from the
+ * framework's /time module, and the selection lives in `?range=` via
+ * /url-state — so a reload, a Back step and a shared link keep the range
+ * the viewer picked, and drill-downs into a detail page inherit it.
  */
-export type TimeRange = 'Last hour' | 'Last 6 hours' | 'Last 24 hours';
+const DEFAULT_RANGE = '-1h';
 
-const EARLIEST: Record<TimeRange, string> = {
-  'Last hour': '-1h',
-  'Last 6 hours': '-6h',
-  'Last 24 hours': '-24h',
-};
-
-const STEP: Record<TimeRange, number> = {
-  'Last hour': 60,
-  'Last 6 hours': 300,
-  'Last 24 hours': 900,
-};
+/** The three ranges this app's pickers have always offered, in their
+ *  original order and with their original labels, read from the shared
+ *  catalog so the bounds and bin widths stay in one place. */
+const RANGES: readonly TimeRangeOption[] = TIME_RANGES.filter((r) =>
+  (['-1h', '-6h', '-24h'] as const).includes(r.value as '-1h' | '-6h' | '-24h'),
+);
 
 const AUTO_REFRESH_MS = 30_000;
 
 export function useTimeRange() {
-  const [range, setRange] = useState<TimeRange>('Last hour');
+  const [earliest, setEarliest] = useRangeParam(DEFAULT_RANGE);
   const [auto, setAuto] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -38,26 +36,25 @@ export function useTimeRange() {
   }, [auto]);
 
   return {
-    range,
-    setRange,
+    /** The selected relative range, e.g. '-1h'. */
+    range: earliest,
+    setRange: setEarliest,
     /** KQL earliest bound for the selected range ('-1h' | '-6h' | '-24h'). */
-    earliest: EARLIEST[range],
+    earliest,
     /** PromQL step in seconds, coarse enough to keep the window light. */
-    step: STEP[range],
+    step: binSecondsFor(earliest, RANGES),
     /** Bump to refetch — wired to the ↻ button and auto-refresh. */
     refreshKey,
     refresh: () => setRefreshKey((k) => k + 1),
     auto,
     setAuto,
     rangeSelect: (
-      <select
-        value={range}
-        onChange={(e) => setRange(e.target.value as TimeRange)}
-        aria-label="Time range"
-      >
-        <option>Last hour</option>
-        <option>Last 6 hours</option>
-        <option>Last 24 hours</option>
+      <select value={earliest} onChange={(e) => setEarliest(e.target.value)} aria-label="Time range">
+        {RANGES.map((r) => (
+          <option key={r.value} value={r.value}>
+            {r.label}
+          </option>
+        ))}
       </select>
     ),
     autoSelect: (

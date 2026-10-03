@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apScoped, latestMetric, queryMetric, type MetricPoint } from '../api/metrics';
 import { runQuery } from '../api/cribl';
 import { investigatePrompt } from '../api/investigator';
-import LineChart, { type LineSeries } from '../components/viz/LineChart';
+import { LineChart, type LineSeries } from '@criblio/app-utils/viz';
 import { useTimeRange } from '../components/TimeRange';
 import s from './ApDetailPage.module.css';
 

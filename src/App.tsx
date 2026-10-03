@@ -1,7 +1,6 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/AppShell';
 import ScrollToTop from './components/ScrollToTop';
-import SettingsPage from './routes/SettingsPage';
 import OverviewPage from './routes/OverviewPage';
 import AccessPointsPage from './routes/AccessPointsPage';
 import ApDetailPage from './routes/ApDetailPage';
@@ -13,7 +12,7 @@ import InvestigatePage from './routes/InvestigatePage';
 import ClientsPage from './routes/ClientsPage';
 import ClientDetailPage from './routes/ClientDetailPage';
 import MapPage from './routes/MapPage';
-import SetupPage from './routes/SetupPage';
+import ConfigurationPage from './routes/ConfigurationPage';
 
 export default function App() {
   return (
@@ -32,8 +31,14 @@ export default function App() {
           <Route path="/map" element={<MapPage />} />
           <Route path="/events" element={<EventsPage />} />
           <Route path="/investigate" element={<InvestigatePage />} />
-          <Route path="/setup" element={<SetupPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/configuration" element={<ConfigurationPage />} />
+          {/* Setup and Settings used to be their own pages. Keep those URLs
+              working, and never answer an unmatched path with an empty app:
+              a browser left on a route that no longer exists matched nothing
+              and reported "the app mounted nothing". */}
+          <Route path="/setup" element={<Navigate to="/configuration?tab=alerts" replace />} />
+          <Route path="/settings" element={<Navigate to="/configuration" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

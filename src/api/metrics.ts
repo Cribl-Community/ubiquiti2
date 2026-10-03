@@ -20,21 +20,6 @@ import {
   type MetricSample,
 } from '@criblio/app-utils/metrics';
 
-// The app-preview harness proxies every fetch the app makes and rejects
-// new requests while one is still in flight ("Preview is busy. Wait for
-// its current requests or Search jobs to finish.") — a page fanning out a
-// dozen metrics GETs at once therefore self-rejects. Serialize the reads:
-// at most one metrics request in flight. The framework's short-TTL cache
-// absorbs the repeat navigations that would otherwise make serial latency
-// painful. (Installed apps have no such gate; serializing is harmless
-// there — the fan-out is just ordered instead of parallel.)
-let tail: Promise<unknown> = Promise.resolve();
-function oneAtATime<T>(run: () => Promise<T>): Promise<T> {
-  const result = tail.then(run, run);
-  tail = result.catch(() => undefined);
-  return result;
-}
-
 /**
  * Failures used to vanish into `.catch(() => undefined)` and render as
  * plain empty states. Record the most recent failure (with the exact
@@ -82,11 +67,11 @@ export async function queryMetric(query: string, step?: number, earliest = '-1h'
     if (step) {
       // Range query: one sample per step per series, grouped by label set.
       // Flattened back to the app's flat MetricPoint rows (time-sorted).
-      const series = await oneAtATime(() => cachedQueryRange(query, { earliest, step }));
+      const series = await cachedQueryRange(query, { earliest, step });
       return series.flatMap((sr) => sr.points.map((p) => ({ value: p.v, time: p.t, labels: sr.labels })));
     }
     // Instant query: single sample per series at `latest`.
-    const samples = await oneAtATime(() => cachedQueryInstant(query, { earliest, latest: 'now' }));
+    const samples = await cachedQueryInstant(query, { earliest, latest: 'now' });
     return samples.map(toPoint);
   } catch (err) {
     recordFailure(query, err);
@@ -120,8 +105,7 @@ export async function latestMetric(query: string, fallback?: number): Promise<nu
  * Device backhaul edges from the PATCHED unpoller build (branches
  * export-uplink-topology / uplink-parent-fields). These metrics do NOT
  * exist in upstream unpoller — if the container is rebuilt from
- * ghcr.io/unpoller/unpoller they disappear and the map loses mesh edges
- * (the KV mesh-config override in Settings remains the fallback).
+ * ghcr.io/unpoller/unpoller they disappear and the map loses mesh edges.
  *
  * `unpoller_device_uplink_info` carries one series per device uplink; the
  * labels are the payload (value is a constant 1 — never filter on it):

@@ -10,7 +10,7 @@ import {
   type MetricsFailure,
 } from '../api/metrics';
 import StatusBanner from '../components/StatusBanner';
-import LineChart, { type LineSeries } from '../components/viz/LineChart';
+import { LineChart, type LineSeries } from '@criblio/app-utils/viz';
 import { runQuery } from '../api/cribl';
 import { useTimeRange } from '../components/TimeRange';
 import s from './OverviewPage.module.css';

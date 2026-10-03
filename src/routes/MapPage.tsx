@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { NetworkGraph, type ForceLink, type ForceNode } from '@criblio/app-utils/graph';
 import { queryMetric, queryMeshEdges, type MeshEdge, type MetricPoint } from '../api/metrics';
 import { investigatePrompt } from '../api/investigator';
-import { loadMeshLinksText, parseMeshLinks } from '../api/goattown';
 import { useTimeRange } from '../components/TimeRange';
 import s from './MapPage.module.css';
 
@@ -102,10 +101,7 @@ export default function MapPage(){
       queryMetric('sum by (name) (rate(unpoller_device_vap_transmit_bytes_total[5m]))',tr.step,tr.earliest),
       queryMetric('100 * max by (name) (unpoller_device_cpu_utilization_ratio)',tr.step,tr.earliest),
       queryMetric('100 * max by (name) (unpoller_device_memory_utilization_ratio)',tr.step,tr.earliest),
-      /* non-fatal: a KV failure (missing key, preview sandbox, proxy hiccup)
-         must never take down the whole map — mesh edges are optional. */
-      loadMeshLinksText().catch(() => null as string | null),
-    ]).then(([devicesQ,topologyQ,clients,clientRx,clientTx,switchRx,switchTx,vapRx,vapTx,cpuRows,memoryRows,meshText])=>{
+    ]).then(([devicesQ,topologyQ,clients,clientRx,clientTx,switchRx,switchTx,vapRx,vapTx,cpuRows,memoryRows])=>{
       /* devices */
       const byMac=new Map<string,Node>();
       devicesQ.forEach(p=>{
@@ -174,18 +170,6 @@ export default function MapPage(){
         const a=byMac.get(l.uplink_mac??''),b=byMac.get(l.downlink_mac??'');
         return (a&&b)?{source:a.id,target:b.id,rate:b.rate,kind:(l.link_type??'WIRED').toLowerCase()==='wireless'?'wireless':'wired'} as Edge:null;
       }).filter((e):e is Edge=>e!==null);
-
-      /* mesh backhaul: the export carries no wireless uplinks, so the
-         child→parent pairs come from Settings. Resolve by node name and
-         promote the child to an AP node even when it has no clients of
-         its own (a bare mesh extender reports no ap_name). */
-      const nodeByName=new Map(byName.map(n=>[n.name,n] as const));
-      for(const [child,parent] of parseMeshLinks(meshText)){
-        const c=nodeByName.get(child),p=nodeByName.get(parent);
-        if(!c||!p||c===p)continue;
-        if(c.kind!=='ap')c.kind='ap';
-        links.push({source:p.id,target:c.id,rate:c.rate,kind:'wireless'} as Edge);
-      }
 
       const pct=(rows:MetricPoint[])=>{const m=new Map<string,number>();rows.forEach(p=>{const n=p.labels?.name;if(n)m.set(n,p.value)});return m};
       setDevices(byName);setTopology(links);setWiredGroups([...wired.values()]);

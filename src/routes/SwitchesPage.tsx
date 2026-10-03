@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { queryMetric, type MetricPoint } from '../api/metrics';
 import EmptyTableRows from '../components/EmptyTableRows';
-import LineChart, { type LineSeries } from '../components/viz/LineChart';
-import BarList, { type BarListItem } from '../components/viz/BarList';
+import { BarList, LineChart, type BarListItem, type LineSeries } from '@criblio/app-utils/viz';
 import { useTimeRange } from '../components/TimeRange';
 import s from './SwitchesPage.module.css';
 

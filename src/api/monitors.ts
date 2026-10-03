@@ -1,5 +1,5 @@
 /**
- * Monitor provisioning for the Setup workflow.
+ * Monitor provisioning for the Configuration → Alerts setup tab.
  *
  * Mirrors the framework provisioner the APM app binds to
  * (`@criblio/app-utils/provisioner`): a prefix scoping every object we may

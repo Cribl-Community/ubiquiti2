@@ -1,0 +1,27 @@
+.tabs {
+  display: flex;
+  gap: var(--cds-space-xs, 4px);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  margin-bottom: var(--cds-space-lg, 20px);
+}
+
+.tab {
+  padding: 8px 16px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--cds-color-fg-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--cds-color-fg);
+}
+
+.tabActive {
+  color: var(--cds-color-primary);
+  border-bottom-color: var(--cds-color-primary);
+}
